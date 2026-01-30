@@ -476,21 +476,19 @@ tabs = st.tabs([
     "Retailer Totals",
     "Vendor Totals",
     "Unit Summary",
-    "Retailer Scorecard",
-    "Vendor Scorecard",
-    "No Sales SKUs",
+    "Executive Summary",
     "WoW Exceptions",
     "Trends",
     "Velocity Analysis",
-    "Retailer Concentration",
     "Run-Rate Forecast",
     "Seasonality",
-    "Executive Summary",
+    "No Sales SKUs",
     "Edit Vendor Map",
     "Backup / Restore",
 ])
-(tab_retail_totals, tab_vendor_totals, tab_unit_summary, tab_retail_score, tab_vendor_score, tab_no_sales,
- tab_wow_exc, tab_trends, tab_velocity, tab_conc, tab_runrate, tab_season, tab_exec, tab_edit_map, tab_backup) = tabs
+(tab_retail_totals, tab_vendor_totals, tab_unit_summary, tab_exec, tab_wow_exc, tab_trends, tab_velocity,
+ tab_runrate, tab_season, tab_no_sales, tab_edit_map, tab_backup) = tabs
+
 
 
 def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks: int, avg_weeks: int):
@@ -732,100 +730,6 @@ def score_kpis(d: pd.DataFrame):
         )
     st.divider()
 
-# Retailer Scorecard
-with tab_retail_score:
-    st.subheader("Retailer Scorecard")
-    retailers = sorted(vmap["Retailer"].dropna().unique().tolist())
-    sel = st.selectbox("Retailer", options=retailers, index=0, key="rs_retailer")
-    d = df[df["Retailer"] == sel].copy()
-
-    score_kpis(d)
-
-    months_opt = st.selectbox("Monthly window", options=[3,6,12], index=0, key="rs_months")
-    monthly = monthly_totals(d).tail(months_opt)
-    if not monthly.empty:
-        mon = monthly.copy()
-        mon["Units"] = mon["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-        st.markdown("### Monthly Totals")
-        st.dataframe(mon.style.format({"Units": lambda v: fmt_int(v), "Sales": lambda v: fmt_currency(v)}),
-                     use_container_width=True, height=_table_height(mon), hide_index=True)
-
-    agg = d.groupby(["SKU","Vendor"], as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
-    agg["Vendor"] = agg["Vendor"].fillna("Unmapped")
-
-    top_n = 10
-    bot_n = 15
-
-    top_units = agg.sort_values(["Units","SKU"], ascending=[False, True]).head(top_n)[["SKU","Units"]]
-    bot_units = agg.sort_values(["Units","SKU"], ascending=[True, True]).head(bot_n)[["SKU","Units"]]
-    top_sales = agg.sort_values(["Sales","SKU"], ascending=[False, True]).head(top_n)[["SKU","Sales"]]
-    bot_sales = agg.sort_values(["Sales","SKU"], ascending=[True, True]).head(bot_n)[["SKU","Sales"]]
-
-    st.markdown("### Top / Bottom SKUs (YTD)")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("#### Top 10 by Units")
-        tu = top_units.copy()
-        tu["Units"] = tu["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-        st.dataframe(tu.style.format({"Units": lambda v: fmt_int(v)}), use_container_width=True, height=_table_height(tu), hide_index=True)
-
-        st.markdown("#### Bottom 15 by Units")
-        bu = bot_units.copy()
-        bu["Units"] = bu["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-        st.dataframe(bu.style.format({"Units": lambda v: fmt_int(v)}), use_container_width=True, height=_table_height(bu), hide_index=True)
-    with c2:
-        st.markdown("#### Top 10 by Sales")
-        st.dataframe(top_sales.style.format({"Sales": lambda v: fmt_currency(v)}), use_container_width=True, height=_table_height(top_sales), hide_index=True)
-
-        st.markdown("#### Bottom 15 by Sales")
-        st.dataframe(bot_sales.style.format({"Sales": lambda v: fmt_currency(v)}), use_container_width=True, height=_table_height(bot_sales), hide_index=True)
-
-# Vendor Scorecard
-with tab_vendor_score:
-    st.subheader("Vendor Scorecard")
-    vendors = sorted([v for v in vmap["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
-    sel = st.selectbox("Vendor", options=vendors, index=0, key="vs_vendor")
-    d = df[df["Vendor"] == sel].copy()
-
-    score_kpis(d)
-
-    months_opt = st.selectbox("Monthly window", options=[3,6,12], index=0, key="vs_months")
-    monthly = monthly_totals(d).tail(months_opt)
-    if not monthly.empty:
-        mon = monthly.copy()
-        mon["Units"] = mon["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-        st.markdown("### Monthly Totals")
-        st.dataframe(mon.style.format({"Units": lambda v: fmt_int(v), "Sales": lambda v: fmt_currency(v)}),
-                     use_container_width=True, height=_table_height(mon), hide_index=True)
-
-    agg = d.groupby(["SKU","Retailer"], as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
-
-    top_n = 10
-    bot_n = 15
-
-    top_units = agg.sort_values(["Units","SKU"], ascending=[False, True]).head(top_n)[["SKU","Retailer","Units"]]
-    bot_units = agg.sort_values(["Units","SKU"], ascending=[True, True]).head(bot_n)[["SKU","Retailer","Units"]]
-    top_sales = agg.sort_values(["Sales","SKU"], ascending=[False, True]).head(top_n)[["SKU","Retailer","Sales"]]
-    bot_sales = agg.sort_values(["Sales","SKU"], ascending=[True, True]).head(bot_n)[["SKU","Retailer","Sales"]]
-
-    st.markdown("### Top / Bottom SKUs (YTD)")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("#### Top 10 by Units")
-        tu = top_units.copy()
-        tu["Units"] = tu["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-        st.dataframe(tu.style.format({"Units": lambda v: fmt_int(v)}), use_container_width=True, height=_table_height(tu), hide_index=True)
-
-        st.markdown("#### Bottom 15 by Units")
-        bu = bot_units.copy()
-        bu["Units"] = bu["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-        st.dataframe(bu.style.format({"Units": lambda v: fmt_int(v)}), use_container_width=True, height=_table_height(bu), hide_index=True)
-    with c2:
-        st.markdown("#### Top 10 by Sales")
-        st.dataframe(top_sales.style.format({"Sales": lambda v: fmt_currency(v)}), use_container_width=True, height=_table_height(top_sales), hide_index=True)
-
-        st.markdown("#### Bottom 15 by Sales")
-        st.dataframe(bot_sales.style.format({"Sales": lambda v: fmt_currency(v)}), use_container_width=True, height=_table_height(bot_sales), hide_index=True)
 
 # No Sales SKUs
 with tab_no_sales:
@@ -865,8 +769,9 @@ with tab_no_sales:
 # -------------------------
 # WoW Exceptions
 # -------------------------
+
 with tab_wow_exc:
-    st.subheader("WoW Exceptions (Top Movers)")
+    st.subheader("Exceptions (Multi-Week Movers)")
 
     if df.empty:
         st.info("No sales data yet.")
@@ -874,80 +779,90 @@ with tab_wow_exc:
         d = add_week_col(df)
         weeks_all = sorted(d["Week"].dropna().unique().tolist())
         if len(weeks_all) < 2:
-            st.info("Need at least two weeks of data to compute WoW changes.")
+            st.info("Need at least two weeks of data to compute changes.")
         else:
-            last_week = weeks_all[-1]
-            prev_week = weeks_all[-2]
+            weeks_back = st.selectbox("Compare over last N weeks", options=[1,2,3,4,5], index=0, key="wow_nweeks")
+            direction = st.selectbox("Direction", options=["Increase", "Decrease"], index=0, key="wow_dir")
+            thresh = st.selectbox(
+                "Percent threshold",
+                options=[0.05,0.10,0.15,0.20,0.25,0.30,0.40,0.50],
+                index=3,
+                format_func=lambda x: f"{int(x*100)}%",
+                key="wow_thresh2"
+            )
 
-            scope = st.selectbox("Scope", options=["All", "Retailer", "Vendor"], index=0, key="wow_scope")
+            end_week = weeks_all[-1]
+            start_idx = max(0, len(weeks_all) - 1 - weeks_back)
+            start_week = weeks_all[start_idx]
+
+            scope = st.selectbox("Scope", options=["All", "Retailer", "Vendor"], index=0, key="wow_scope2")
             if scope == "Retailer":
                 opts = sorted(vmap["Retailer"].dropna().unique().tolist())
-                pick = st.selectbox("Retailer", options=opts, index=0, key="wow_pick_r")
+                pick = st.selectbox("Retailer", options=opts, index=0, key="wow_pick_r2")
                 d2 = d[d["Retailer"] == pick].copy()
             elif scope == "Vendor":
                 opts = sorted([v for v in vmap["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
-                pick = st.selectbox("Vendor", options=opts, index=0, key="wow_pick_v")
+                pick = st.selectbox("Vendor", options=opts, index=0, key="wow_pick_v2")
                 d2 = d[d["Vendor"] == pick].copy()
             else:
                 d2 = d
 
-            thresh = st.selectbox("Percent threshold", options=[0.2, 0.3, 0.5], index=1,
-                                  format_func=lambda x: f"{int(x*100)}%", key="wow_thresh")
+            weekly = d2.groupby(["Retailer","Vendor","SKU","Week"], as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
+            piv_u = weekly.pivot_table(index=["Retailer","Vendor","SKU"], columns="Week", values="Units", aggfunc="sum", fill_value=0.0)
+            piv_s = weekly.pivot_table(index=["Retailer","Vendor","SKU"], columns="Week", values="Sales", aggfunc="sum", fill_value=0.0)
 
-            cur = d2[d2["Week"] == last_week].groupby(["Retailer","Vendor","SKU"], as_index=False).agg(
-                Units=("Units","sum"),
-                Sales=("Sales","sum")
-            ).rename(columns={"Units":"Units_Last","Sales":"Sales_Last"})
+            for w in [start_week, end_week]:
+                if w not in piv_u.columns:
+                    piv_u[w] = 0.0
+                if w not in piv_s.columns:
+                    piv_s[w] = 0.0
 
-            prev = d2[d2["Week"] == prev_week].groupby(["Retailer","Vendor","SKU"], as_index=False).agg(
-                Units=("Units","sum"),
-                Sales=("Sales","sum")
-            ).rename(columns={"Units":"Units_Prev","Sales":"Sales_Prev"})
+            start_u = piv_u[start_week]
+            end_u = piv_u[end_week]
+            start_s = piv_s[start_week]
+            end_s = piv_s[end_week]
 
-            merged = cur.merge(prev, on=["Retailer","Vendor","SKU"], how="outer").fillna(0.0)
-            merged["WoW_Units_Diff"] = merged["Units_Last"] - merged["Units_Prev"]
-            merged["WoW_Sales_Diff"] = merged["Sales_Last"] - merged["Sales_Prev"]
-            merged["WoW_Units_Pct"] = merged.apply(lambda r: safe_div(r["WoW_Units_Diff"], r["Units_Prev"]) if r["Units_Prev"] != 0 else np.nan, axis=1)
+            diff_u = end_u - start_u
+            diff_s = end_s - start_s
+            pct_u = diff_u / start_u.replace(0, np.nan)
 
-            show = merged.copy()
-            show = show[(show["WoW_Units_Pct"].abs() >= thresh) | (show["Units_Prev"] == 0) | (show["Units_Last"] == 0)]
+            res = pd.DataFrame({
+                "Units_Start": start_u,
+                "Units_End": end_u,
+                "Units_Diff": diff_u,
+                "Units_Pct": pct_u,
+                "Sales_Start": start_s,
+                "Sales_End": end_s,
+                "Sales_Diff": diff_s,
+            }).reset_index()
 
-            top = show.sort_values(["WoW_Units_Diff","WoW_Sales_Diff"], ascending=[False, False]).head(25)
-            bot = show.sort_values(["WoW_Units_Diff","WoW_Sales_Diff"], ascending=[True, True]).head(25)
+            if direction == "Increase":
+                res = res[((res["Units_Pct"] >= thresh) & res["Units_Pct"].notna()) | ((res["Units_Start"] == 0) & (res["Units_End"] > 0))]
+                res = res.sort_values(["Units_Diff","Sales_Diff"], ascending=[False, False])
+            else:
+                res = res[((res["Units_Pct"] <= -thresh) & res["Units_Pct"].notna()) | ((res["Units_End"] == 0) & (res["Units_Start"] > 0))]
+                res = res.sort_values(["Units_Diff","Sales_Diff"], ascending=[True, True])
 
-            def fmt_table(x: pd.DataFrame) -> pd.DataFrame:
-                t = x[["Retailer","Vendor","SKU","Units_Last","Units_Prev","WoW_Units_Diff","Sales_Last","Sales_Prev","WoW_Sales_Diff"]].copy()
-                t["Units_Last"] = t["Units_Last"].map(lambda v: int(round(float(v))))
-                t["Units_Prev"] = t["Units_Prev"].map(lambda v: int(round(float(v))))
-                t["WoW_Units_Diff"] = t["WoW_Units_Diff"].map(lambda v: int(round(float(v))))
-                return t
+            res = res.head(100)
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"### Top Gainers ({pd.Timestamp(last_week).strftime('%m-%d')} vs {pd.Timestamp(prev_week).strftime('%m-%d')})")
-                t = fmt_table(top)
+            if res.empty:
+                st.info("No items met the threshold for this selection.")
+            else:
+                t = res[["Retailer","Vendor","SKU","Units_Start","Units_End","Units_Diff","Sales_Start","Sales_End","Sales_Diff"]].copy()
+                for c in ["Units_Start","Units_End","Units_Diff"]:
+                    t[c] = t[c].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
+
                 sty = t.style.format({
-                    "Sales_Last": lambda v: fmt_currency(v),
-                    "Sales_Prev": lambda v: fmt_currency(v),
-                    "WoW_Sales_Diff": lambda v: fmt_currency(v),
-                    "Units_Last": lambda v: fmt_int(v),
-                    "Units_Prev": lambda v: fmt_int(v),
-                    "WoW_Units_Diff": lambda v: fmt_int(v),
-                }).applymap(lambda v: f"color: {_color(v)};", subset=["WoW_Units_Diff","WoW_Sales_Diff"])
-                st.dataframe(sty, use_container_width=True, height=_table_height(t, max_px=900), hide_index=True)
+                    "Units_Start": lambda v: fmt_int(v),
+                    "Units_End": lambda v: fmt_int(v),
+                    "Units_Diff": lambda v: fmt_int(v),
+                    "Sales_Start": lambda v: fmt_currency(v),
+                    "Sales_End": lambda v: fmt_currency(v),
+                    "Sales_Diff": lambda v: fmt_currency(v),
+                }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
 
-            with c2:
-                st.markdown("### Top Decliners")
-                t = fmt_table(bot)
-                sty = t.style.format({
-                    "Sales_Last": lambda v: fmt_currency(v),
-                    "Sales_Prev": lambda v: fmt_currency(v),
-                    "WoW_Sales_Diff": lambda v: fmt_currency(v),
-                    "Units_Last": lambda v: fmt_int(v),
-                    "Units_Prev": lambda v: fmt_int(v),
-                    "WoW_Units_Diff": lambda v: fmt_int(v),
-                }).applymap(lambda v: f"color: {_color(v)};", subset=["WoW_Units_Diff","WoW_Sales_Diff"])
-                st.dataframe(sty, use_container_width=True, height=_table_height(t, max_px=900), hide_index=True)
+                st.caption(f"Comparing {pd.Timestamp(start_week).strftime('%m-%d')} → {pd.Timestamp(end_week).strftime('%m-%d')}")
+                st.dataframe(sty, use_container_width=True, height=_table_height(t, max_px=1200), hide_index=True)
 
 # -------------------------
 # Trends
@@ -1061,47 +976,6 @@ with tab_velocity:
         detail["AvgUnits"] = detail["AvgUnits"].round(2)
         st.dataframe(detail[[level,"SKU","AvgUnits"]], use_container_width=True, height=_table_height(detail, max_px=1100), hide_index=True)
 
-# -------------------------
-# Retailer Concentration Risk
-# -------------------------
-with tab_conc:
-    st.subheader("Retailer Concentration (Vendor Risk)")
-
-    if df.empty:
-        st.info("No sales data yet.")
-    else:
-        vendors = sorted([v for v in vmap["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
-        sel = st.selectbox("Vendor", options=vendors, index=0, key="conc_vendor")
-        d = df[df["Vendor"] == sel].copy()
-        if d.empty:
-            st.info("No sales for this vendor.")
-        else:
-            agg = d.groupby("Retailer", as_index=False).agg(Sales=("Sales","sum"), Units=("Units","sum"))
-            total_sales = float(agg["Sales"].fillna(0).sum())
-            agg["PctSales"] = agg["Sales"].fillna(0).apply(lambda v: (v/total_sales) if total_sales else 0.0)
-            agg = agg.sort_values("PctSales", ascending=False)
-            agg["CumPct"] = agg["PctSales"].cumsum()
-
-            flags = []
-            if not agg.empty:
-                if agg.iloc[0]["PctSales"] >= 0.6:
-                    flags.append("⚠️ >60% of sales from one retailer")
-                if len(agg) >= 2 and (agg.iloc[0]["PctSales"] + agg.iloc[1]["PctSales"]) >= 0.8:
-                    flags.append("⚠️ >80% of sales from top two retailers")
-            if flags:
-                st.warning(" / ".join(flags))
-
-            st.bar_chart(agg.set_index("Retailer")[["Sales"]], height=320)
-
-            show = agg.copy()
-            show["Units"] = show["Units"].map(lambda v: int(round(float(v))))
-            sty = show.style.format({
-                "Units": lambda v: fmt_int(v),
-                "Sales": lambda v: fmt_currency(v),
-                "PctSales": lambda v: f"{v*100:.1f}%",
-                "CumPct": lambda v: f"{v*100:.1f}%"
-            })
-            st.dataframe(sty, use_container_width=True, height=_table_height(show, max_px=900), hide_index=True)
 
 # -------------------------
 # Run-Rate Forecast
@@ -1219,6 +1093,7 @@ with tab_season:
 # -------------------------
 # Executive Summary Export
 # -------------------------
+
 with tab_exec:
     st.subheader("Executive Summary")
 
@@ -1237,11 +1112,28 @@ with tab_exec:
         d = df.copy()
         title = "Executive Summary - All Retailers"
 
-    timeframe = st.selectbox("Timeframe", options=["YTD (all loaded weeks)", "Last 12 weeks"], index=0, key="ex_tf")
     d = add_week_col(d)
-    if timeframe.startswith("Last"):
-        w = last_n_weeks(d, 12)
-        d = d[d["Week"].isin(w)].copy()
+
+    tf_label = st.selectbox(
+        "Timeframe",
+        options=["2 weeks","4 weeks","6 weeks","8 weeks","3 months","6 months","12 months","YTD (all loaded)"],
+        index=1,
+        key="ex_tf2"
+    )
+
+    # Apply timeframe
+    if "weeks" in tf_label:
+        n = int(tf_label.split()[0])
+        use = last_n_weeks(d, n)
+        d = d[d["Week"].isin(use)].copy()
+    elif "months" in tf_label:
+        n = int(tf_label.split()[0])
+        d["MonthP"] = pd.to_datetime(d["StartDate"], errors="coerce").dt.to_period("M")
+        months = sorted(d["MonthP"].dropna().unique().tolist())
+        usem = months[-n:] if len(months) >= n else months
+        d = d[d["MonthP"].isin(usem)].copy()
+    else:
+        pass
 
     m = wow_mom_metrics(d)
     cols = st.columns(6)
@@ -1254,21 +1146,87 @@ with tab_exec:
 
     st.divider()
 
+    # Monthly totals table
+    d2 = d.copy()
+    d2["StartDate"] = pd.to_datetime(d2["StartDate"], errors="coerce")
+    d2["MonthP"] = d2["StartDate"].dt.to_period("M")
+    mon = d2.groupby("MonthP", as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum")).sort_values("MonthP")
+    if not mon.empty:
+        mon["Month"] = mon["MonthP"].map(month_label)
+        mon = mon[["Month","Units","Sales"]]
+        mon["Units"] = mon["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
+        st.markdown("### Monthly totals")
+        st.dataframe(mon.style.format({"Units": lambda v: fmt_int(v), "Sales": lambda v: fmt_currency(v)}),
+                     use_container_width=True, height=_table_height(mon, max_px=800), hide_index=True)
+
+    # Mix table depending on scope
+    if scope == "Retailer":
+        mix = d.groupby("Vendor", as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
+        mix = mix[(mix["Units"].fillna(0) > 0) | (mix["Sales"].fillna(0) > 0)]
+        total_u = float(mix["Units"].sum()) if not mix.empty else 0.0
+        total_s = float(mix["Sales"].sum()) if not mix.empty else 0.0
+        mix["% Units"] = mix["Units"].apply(lambda v: (v/total_u) if total_u else 0.0)
+        mix["% Sales"] = mix["Sales"].apply(lambda v: (v/total_s) if total_s else 0.0)
+        mix = mix.sort_values("% Sales", ascending=False)
+        mix["Units"] = mix["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
+        st.markdown("### Vendor mix for this retailer")
+        st.dataframe(mix.style.format({
+            "Units": lambda v: fmt_int(v),
+            "Sales": lambda v: fmt_currency(v),
+            "% Units": lambda v: f"{v*100:.1f}%",
+            "% Sales": lambda v: f"{v*100:.1f}%"
+        }), use_container_width=True, height=_table_height(mix, max_px=900), hide_index=True)
+
+    elif scope == "Vendor":
+        mix = d.groupby("Retailer", as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
+        mix = mix[(mix["Units"].fillna(0) > 0) | (mix["Sales"].fillna(0) > 0)]
+        total_u = float(mix["Units"].sum()) if not mix.empty else 0.0
+        total_s = float(mix["Sales"].sum()) if not mix.empty else 0.0
+        mix["% Units"] = mix["Units"].apply(lambda v: (v/total_u) if total_u else 0.0)
+        mix["% Sales"] = mix["Sales"].apply(lambda v: (v/total_s) if total_s else 0.0)
+        mix = mix.sort_values("% Sales", ascending=False)
+        mix["Units"] = mix["Units"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
+        st.markdown("### Retailer mix for this vendor")
+        st.dataframe(mix.style.format({
+            "Units": lambda v: fmt_int(v),
+            "Sales": lambda v: fmt_currency(v),
+            "% Units": lambda v: f"{v*100:.1f}%",
+            "% Sales": lambda v: f"{v*100:.1f}%"
+        }), use_container_width=True, height=_table_height(mix, max_px=900), hide_index=True)
+
+    st.divider()
+
     sku_agg = d.groupby(["SKU","Retailer","Vendor"], as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
     sku_agg["Vendor"] = sku_agg["Vendor"].fillna("Unmapped")
+    sold = sku_agg[(sku_agg["Units"].fillna(0) > 0) & (sku_agg["Sales"].fillna(0) > 0)].copy()
 
-    top_units = sku_agg.sort_values("Units", ascending=False).head(10)[["SKU","Retailer","Vendor","Units"]].copy()
-    top_sales = sku_agg.sort_values("Sales", ascending=False).head(10)[["SKU","Retailer","Vendor","Sales"]].copy()
+    top_units = sold.sort_values("Units", ascending=False).head(10)[["SKU","Retailer","Vendor","Units"]].copy()
+    top_sales = sold.sort_values("Sales", ascending=False).head(10)[["SKU","Retailer","Vendor","Sales"]].copy()
+    bot_units = sold.sort_values("Units", ascending=True).head(10)[["SKU","Retailer","Vendor","Units"]].copy()
+    bot_sales = sold.sort_values("Sales", ascending=True).head(10)[["SKU","Retailer","Vendor","Sales"]].copy()
 
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("### Top 10 SKUs by Units")
-        t = top_units.copy()
-        t["Units"] = t["Units"].map(lambda v: int(round(float(v))))
-        st.dataframe(t.style.format({"Units": lambda v: fmt_int(v)}), use_container_width=True, height=_table_height(t, max_px=700), hide_index=True)
+        tu = top_units.copy()
+        tu["Units"] = tu["Units"].map(lambda v: int(round(float(v))))
+        st.dataframe(tu.style.format({"Units": lambda v: fmt_int(v)}),
+                     use_container_width=True, height=_table_height(tu, max_px=700), hide_index=True)
+
+        st.markdown("### Bottom 10 SKUs by Units")
+        bu = bot_units.copy()
+        bu["Units"] = bu["Units"].map(lambda v: int(round(float(v))))
+        st.dataframe(bu.style.format({"Units": lambda v: fmt_int(v)}),
+                     use_container_width=True, height=_table_height(bu, max_px=700), hide_index=True)
+
     with c2:
         st.markdown("### Top 10 SKUs by Sales")
-        st.dataframe(top_sales.style.format({"Sales": lambda v: fmt_currency(v)}), use_container_width=True, height=_table_height(top_sales, max_px=700), hide_index=True)
+        st.dataframe(top_sales.style.format({"Sales": lambda v: fmt_currency(v)}),
+                     use_container_width=True, height=_table_height(top_sales, max_px=700), hide_index=True)
+
+        st.markdown("### Bottom 10 SKUs by Sales")
+        st.dataframe(bot_sales.style.format({"Sales": lambda v: fmt_currency(v)}),
+                     use_container_width=True, height=_table_height(bot_sales, max_px=700), hide_index=True)
 
     st.divider()
 
@@ -1302,7 +1260,6 @@ with tab_exec:
                            file_name="executive_summary.pdf", mime="application/pdf")
     else:
         st.info("PDF export requires the reportlab package.")
-
 
 # Edit Vendor Map
 with tab_edit_map:
