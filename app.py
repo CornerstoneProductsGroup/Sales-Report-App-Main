@@ -837,11 +837,14 @@ with tab_wow_exc:
                     res["Sales_Diff"] = res["Sales_End"] - res["Sales_Base"]
                     res["Units_Pct"] = res["Units_Diff"] / res["Units_Base"].replace(0, np.nan)
 
+
+                    # Require at least one prior week with sales/units (exclude brand-new items)
+                    res = res[(res["Units_Base"] > 0) | (res["Sales_Base"] > 0)]
                     if direction == "Increase":
-                        res = res[((res["Units_Pct"] >= thresh) & res["Units_Pct"].notna()) | ((res["Units_Base"] == 0) & (res["Units_End"] > 0))]
+                        res = res[(res["Units_Pct"] >= thresh) & res["Units_Pct"].notna()]
                         res = res.sort_values(["Units_Diff","Sales_Diff"], ascending=[False, False])
                     else:
-                        res = res[((res["Units_Pct"] <= -thresh) & res["Units_Pct"].notna()) | ((res["Units_End"] == 0) & (res["Units_Base"] > 0))]
+                        res = res[(res["Units_Pct"] <= -thresh) & res["Units_Pct"].notna()]
                         res = res.sort_values(["Units_Diff","Sales_Diff"], ascending=[True, True])
 
                     res = res.head(100)
