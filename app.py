@@ -369,79 +369,98 @@ def upsert_price_history(new_rows: pd.DataFrame) -> tuple[int, int, int]:
     updated = int((diff["Action"] == "update").sum())
     return (inserted, updated, noop)
 
-def apply_effective_prices(df_in: pd.DataFrame, vmap_in: pd.DataFrame, ph: pd.DataFrame) -> pd.DataFrame:
+
+def apply_effective_prices(base: pd.DataFrame, vmap: pd.DataFrame, ph: pd.DataFrame) -> pd.DataFrame:
     """
-    Adds PriceEffective and recomputes Sales using effective pricing:
-      - exact match on (Retailer, SKU) if present
-      - else wildcard Retailer="*" by SKU
-      - else fallback to vendor map Price
+    Hybrid pricing:
+      1) If UnitPrice is provided on the weekly sheet, ALWAYS use it (locks history).
+      2) Else, use effective-date price history (retailer-specific first, then wildcard '*' retailer for all).
+      3) Else, fall back to vendor map Price.
+
+    Returns base with:
+      - PriceEffective
+      - Sales = Units * PriceEffective
     """
-    out = df_in.copy()
-    out["StartDate"] = pd.to_datetime(out["StartDate"], errors="coerce")
+    base = base.copy()
 
-    # fallback prices from vendor map already merged as out["Price"]
-    out["PriceEffective"] = out["Price"]
+    # Ensure expected columns exist
+    if "Price" not in base.columns:
+        base["Price"] = np.nan
+    if "UnitPrice" not in base.columns:
+        base["UnitPrice"] = np.nan
 
-    # If weekly sheet provided a UnitPrice (e.g., Depot/Lowe's), treat it as locked historical truth
-    if "UnitPrice" in out.columns:
-        out["PriceEffective"] = out["UnitPrice"].combine_first(out["PriceEffective"])
-
-    if ph is None or ph.empty or out.empty:
-        out["Sales"] = out["Units"] * out["PriceEffective"]
-        return out
-
-    ph2 = ph.copy()
-    ph2["StartDate"] = pd.to_datetime(ph2["StartDate"], errors="coerce")
-    ph2 = ph2.dropna(subset=["SKU","Price","StartDate"])
-
-    # exact retailer+sku
-    ph_exact = ph2[ph2["Retailer"] != "*"].sort_values(["Retailer","SKU","StartDate"])
-    base = out.sort_values(["Retailer","SKU","StartDate"])
-    if not ph_exact.empty:
-        
-    # Ensure keys are proper dtypes and sorted for merge_asof
     base["StartDate"] = pd.to_datetime(base["StartDate"], errors="coerce")
+
+    # Start with vendor-map price
+    base["PriceEffective"] = base["Price"]
+
+    # UnitPrice from weekly sheet overrides everything
+    base["PriceEffective"] = base["UnitPrice"].combine_first(base["PriceEffective"])
+
+    # If no price history, finish
+    if ph is None or ph.empty:
+        return base
+
+    ph = ph.copy()
     ph["StartDate"] = pd.to_datetime(ph["StartDate"], errors="coerce")
+    ph = ph.dropna(subset=["SKU", "StartDate", "Price"]).copy()
 
-    # merge_asof requires both frames sorted by group keys then "on" key
-    base = base.sort_values(["Retailer", "SKU", "StartDate"]).reset_index(drop=True)
-    ph = ph.sort_values(["Retailer", "SKU", "StartDate"]).reset_index(drop=True)
+    if ph.empty:
+        return base
 
-    exact = pd.merge_asof(
-            base,
-            ph_exact.rename(columns={"Price":"PHPrice"}),
-            by=["Retailer","SKU"],
-            left_on="StartDate",
-            right_on="StartDate",
+    # Normalize retailer field
+    if "Retailer" not in ph.columns:
+        ph["Retailer"] = "*"
+    ph["Retailer"] = ph["Retailer"].fillna("*").astype(str).str.strip()
+    ph["SKU"] = ph["SKU"].map(_normalize_sku)
+    base["SKU"] = base["SKU"].map(_normalize_sku)
+
+    # Retailer-specific history (not '*')
+    ph_exact = ph[ph["Retailer"] != "*"].copy()
+    # Wildcard history applies to all retailers
+    ph_star = ph[ph["Retailer"] == "*"].copy()
+
+    # Apply retailer-specific prices using merge_asof
+    if not ph_exact.empty:
+        b1 = base.sort_values(["Retailer", "SKU", "StartDate"]).reset_index(drop=True)
+        p1 = ph_exact.sort_values(["Retailer", "SKU", "StartDate"]).reset_index(drop=True)
+
+        # merge_asof requires both sides sorted by by-keys then on-key
+        exact = pd.merge_asof(
+            b1,
+            p1[["Retailer", "SKU", "StartDate", "Price"]].rename(columns={"Price": "PH_Price"}),
+            by=["Retailer", "SKU"],
+            on="StartDate",
             direction="backward",
-            allow_exact_matches=True
+            allow_exact_matches=True,
         )
         base = exact
-        base["PriceEffective"] = base["PHPrice"].combine_first(base["PriceEffective"])
-        base = base.drop(columns=["PHPrice"], errors="ignore")
 
-    # wildcard by SKU
-    ph_wild = ph2[ph2["Retailer"] == "*"].sort_values(["SKU","StartDate"])
-    base = base.sort_values(["SKU","StartDate"])
-    if not ph_wild.empty:
-        wild = pd.merge_asof(
-            base,
-            ph_wild.rename(columns={"Price":"PHPrice"}),
-            by=["SKU"],
-            left_on="StartDate",
-            right_on="StartDate",
-            direction="backward",
-            allow_exact_matches=True
-        )
-        base = wild
-        base["PriceEffective"] = base["PHPrice"].combine_first(base["PriceEffective"])
-        base = base.drop(columns=["PHPrice"], errors="ignore")
+        # Only use PH_Price when UnitPrice is missing
+        base["PriceEffective"] = base["UnitPrice"].combine_first(base["PH_Price"]).combine_first(base["PriceEffective"])
+        base = base.drop(columns=["PH_Price"], errors="ignore")
 
-    # Ensure UnitPrice (from weekly sheet) always overrides effective pricing
-    if "UnitPrice" in base.columns:
-        base["PriceEffective"] = base["UnitPrice"].combine_first(base["PriceEffective"])
+    # Apply wildcard prices for any rows still missing an effective price (and no UnitPrice)
+    if not ph_star.empty:
+        missing = base["UnitPrice"].isna() & base["PriceEffective"].isna()
+        if missing.any():
+            b2 = base.loc[missing].copy()
+            b2 = b2.sort_values(["SKU", "StartDate"]).reset_index(drop=True)
+            p2 = ph_star.sort_values(["SKU", "StartDate"]).reset_index(drop=True)
 
-    base["Sales"] = base["Units"] * base["PriceEffective"]
+            star = pd.merge_asof(
+                b2,
+                p2[["SKU", "StartDate", "Price"]].rename(columns={"Price": "PH_PriceStar"}),
+                by=["SKU"],
+                on="StartDate",
+                direction="backward",
+                allow_exact_matches=True,
+            )
+            base.loc[missing, "PriceEffective"] = star["PH_PriceStar"].values
+
+    # Final: ensure UnitPrice still wins
+    base["PriceEffective"] = base["UnitPrice"].combine_first(base["PriceEffective"])
+
     return base
 
 def upsert_sales(existing: pd.DataFrame, new_rows: pd.DataFrame) -> pd.DataFrame:
