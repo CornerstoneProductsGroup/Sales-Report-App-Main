@@ -481,17 +481,44 @@ tabs = st.tabs([
     "Trends",
     "Velocity Analysis",
     "Run-Rate Forecast",
-    "Seasonality",
     "No Sales SKUs",
     "Edit Vendor Map",
     "Backup / Restore",
 ])
 (tab_retail_totals, tab_vendor_totals, tab_unit_summary, tab_exec, tab_wow_exc, tab_trends, tab_velocity,
- tab_runrate, tab_season, tab_no_sales, tab_edit_map, tab_backup) = tabs
+ tab_runrate, tab_no_sales, tab_edit_map, tab_backup) = tabs
 
 
 
-def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks: int, avg_weeks: int):
+
+def resolve_week_dates(periods: list, window):
+    """
+    periods: sorted list of datetime.date representing week start dates.
+    window: int weeks or string like "6 months".
+    Returns list of week dates to include, ordered ascending.
+    """
+    if not periods:
+        return []
+    if isinstance(window, int):
+        return periods[-window:] if len(periods) >= window else periods
+    if isinstance(window, str) and "month" in window:
+        try:
+            n = int(window.split()[0])
+        except Exception:
+            n = 6
+        # get last n unique months present in periods
+        months = [pd.Timestamp(d).to_period("M") for d in periods]
+        uniq = []
+        for p in months:
+            if p not in uniq:
+                uniq.append(p)
+        usem = uniq[-n:] if len(uniq) >= n else uniq
+        use = [d for d in periods if pd.Timestamp(d).to_period("M") in usem]
+        return use
+    return periods
+
+
+def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks, avg_weeks):
     if base.empty:
         return pd.DataFrame(), pd.DataFrame()
     base = base.copy()
@@ -500,7 +527,7 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks: int, avg_we
     if not periods:
         return pd.DataFrame(), pd.DataFrame()
 
-    use = periods[-tf_weeks:] if len(periods) >= tf_weeks else periods
+    use = resolve_week_dates(periods, tf_weeks)
     d = base[base["StartDate"].dt.date.isin(use)].copy()
     d["Week"] = d["StartDate"].dt.date
 
@@ -514,7 +541,7 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks: int, avg_we
         sales_p["Diff"] = 0.0
         units_p["Diff"] = 0.0
 
-    avg_use = use[-avg_weeks:] if len(use) >= avg_weeks else use
+    avg_use = resolve_week_dates(use, avg_weeks)
     sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
     units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
 
@@ -538,8 +565,8 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks: int, avg_we
 # Retailer Totals
 with tab_retail_totals:
     st.subheader("Retailer Totals")
-    tf = st.selectbox("Timeframe", options=[2,4,8,12], index=1, key="rt_tf")
-    avgw = st.selectbox("Average window", options=[4,8,12], index=0, key="rt_avg")
+    tf = st.selectbox("Timeframe", options=[2,4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=1, key="rt_tf")
+    avgw = st.selectbox("Average window", options=[4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=0, key="rt_avg")
 
     sales_t, units_t = make_totals_tables(df, "Retailer", tf, avgw)
     if sales_t.empty:
@@ -572,8 +599,8 @@ with tab_retail_totals:
 # Vendor Totals
 with tab_vendor_totals:
     st.subheader("Vendor Totals")
-    tf = st.selectbox("Timeframe", options=[2,4,8,12], index=1, key="vt_tf")
-    avgw = st.selectbox("Average window", options=[4,8,12], index=0, key="vt_avg")
+    tf = st.selectbox("Timeframe", options=[2,4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=1, key="vt_tf")
+    avgw = st.selectbox("Average window", options=[4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=0, key="vt_avg")
 
     base = df.copy()
     base["Vendor"] = base["Vendor"].fillna("Unmapped")
@@ -610,13 +637,13 @@ with tab_unit_summary:
     st.subheader("Unit Summary")
     retailers = sorted(vmap["Retailer"].dropna().unique().tolist())
     sel_r = st.selectbox("Retailer", options=retailers, index=0, key="us_retailer")
-    tf = st.selectbox("Timeframe", options=[2,4,8,12], index=1, key="us_tf")
-    avgw = st.selectbox("Average window", options=[4,8,12], index=0, key="us_avg")
+    tf = st.selectbox("Timeframe", options=[2,4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=1, key="us_tf")
+    avgw = st.selectbox("Average window", options=[4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=0, key="us_avg")
 
     d = df[df["Retailer"] == sel_r].copy()
     d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
     periods = sorted(d["StartDate"].dropna().dt.date.unique().tolist())
-    use = periods[-tf:] if len(periods) >= tf else periods
+    use = resolve_week_dates(periods, tf)
     if not use:
         st.info("No data for this retailer yet.")
     else:
@@ -636,7 +663,7 @@ with tab_unit_summary:
                 units_p["Diff"] = units_p[use[-1]] - units_p[use[-2]]
             else:
                 units_p["Diff"] = 0.0
-            avg_use = use[-avgw:] if len(use) >= avgw else use
+            avg_use = resolve_week_dates(use, avgw)
             units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
 
             units_p = units_p.rename(columns={c: pd.Timestamp(c).strftime("%m-%d") for c in use})
@@ -676,7 +703,7 @@ with tab_unit_summary:
                 sales_p["Diff"] = sales_p[use[-1]] - sales_p[use[-2]]
             else:
                 sales_p["Diff"] = 0.0
-            avg_use = use[-avgw:] if len(use) >= avgw else use
+            avg_use = resolve_week_dates(use, avgw)
             sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
 
             sales_p = sales_p.rename(columns={c: pd.Timestamp(c).strftime("%m-%d") for c in use})
@@ -852,15 +879,18 @@ with tab_wow_exc:
                     if res.empty:
                         st.info("No items met the threshold for this selection.")
                     else:
-                        t = res[["Retailer","Vendor","SKU","Units_Base","Units_End","Units_Diff","Sales_Base","Sales_End","Sales_Diff"]].copy()
+                        t = res[["Retailer","Vendor","SKU","Units_Base","Units_End","Units_Diff","Units_Pct","Sales_Base","Sales_End","Sales_Diff"]].copy()
                         t["Units_Base"] = t["Units_Base"].map(lambda v: float(v))
                         t["Units_End"] = t["Units_End"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
                         t["Units_Diff"] = t["Units_Diff"].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
+                        # Rename for display
+                        t = t.rename(columns={"Units_Pct":"% Diff"})
 
                         sty = t.style.format({
                             "Units_Base": lambda v: fmt_2(v),
                             "Units_End": lambda v: fmt_int(v),
                             "Units_Diff": lambda v: fmt_int(v),
+                            "% Diff": lambda v: f"{(v*100):.1f}%" if pd.notna(v) else "—",
                             "Sales_Base": lambda v: fmt_currency(v),
                             "Sales_End": lambda v: fmt_currency(v),
                             "Sales_Diff": lambda v: fmt_currency(v),
@@ -1037,70 +1067,6 @@ with tab_runrate:
 
 # -------------------------
 # Seasonality Heatmap
-# -------------------------
-with tab_season:
-    st.subheader("Seasonality Heatmap")
-
-    if df.empty:
-        st.info("No sales data yet.")
-    else:
-        view = st.selectbox("View", options=["SKU", "Vendor", "Retailer"], index=0, key="sea_view")
-        metric = st.selectbox("Metric", options=["Units", "Sales"], index=0, key="sea_metric")
-        tf_months = st.selectbox("Months to show", options=[6, 12, 24], index=1, key="sea_months")
-
-        d = df.copy()
-        d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
-        d["MonthP"] = d["StartDate"].dt.to_period("M")
-
-        months = sorted(d["MonthP"].dropna().unique().tolist())
-        months = months[-tf_months:] if len(months) >= tf_months else months
-        d = d[d["MonthP"].isin(months)].copy()
-
-        if view == "SKU":
-            r_opts = sorted(vmap["Retailer"].dropna().unique().tolist())
-            r_pick = st.selectbox("Retailer (for SKU list)", options=r_opts, index=0, key="sea_r")
-            d = d[d["Retailer"] == r_pick].copy()
-            sku_order = vmap[vmap["Retailer"] == r_pick].sort_values("MapOrder")["SKU"].tolist()
-            idx_col = "SKU"
-        elif view == "Vendor":
-            idx_col = "Vendor"
-        else:
-            idx_col = "Retailer"
-
-        agg = d.groupby([idx_col, "MonthP"], as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
-        val = "Units" if metric == "Units" else "Sales"
-        piv = agg.pivot_table(index=idx_col, columns="MonthP", values=val, aggfunc="sum", fill_value=0.0)
-        piv = piv.reindex(columns=months, fill_value=0.0)
-
-        if view == "SKU":
-            piv = piv.reindex([s for s in sku_order if s in piv.index])
-        else:
-            piv = piv.sort_index()
-
-        piv.columns = [month_label(p) for p in piv.columns]
-        piv = piv.loc[piv.sum(axis=1) > 0]
-
-        if piv.empty:
-            st.info("Nothing to show for this selection.")
-        else:
-            # Try heatmap styling; if matplotlib isn't available, fall back to plain table styling
-            try:
-                if metric == "Sales":
-                    sty = piv.style.format(lambda v: fmt_currency(v)).background_gradient(axis=None)
-                else:
-                    piv_u = piv.applymap(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-                    sty = piv_u.style.format(lambda v: fmt_int(v)).background_gradient(axis=None)
-                st.dataframe(sty, use_container_width=True, height=_table_height(piv.reset_index(), max_px=1200), hide_index=False)
-            except Exception:
-                if metric == "Sales":
-                    st.dataframe(piv.reset_index().style.format({c: (lambda v: fmt_currency(v)) for c in piv.reset_index().columns if c != piv.reset_index().columns[0]}),
-                                 use_container_width=True, height=_table_height(piv.reset_index(), max_px=1200), hide_index=True)
-                else:
-                    piv_u = piv.applymap(lambda v: int(round(float(v))) if pd.notna(v) else 0)
-                    st.dataframe(piv_u.reset_index().style.format({c: (lambda v: fmt_int(v)) for c in piv_u.reset_index().columns if c != piv_u.reset_index().columns[0]}),
-                                 use_container_width=True, height=_table_height(piv_u.reset_index(), max_px=1200), hide_index=True)
-# -------------------------
-# Executive Summary Export
 # -------------------------
 
 with tab_exec:
