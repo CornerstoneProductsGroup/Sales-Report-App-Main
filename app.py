@@ -571,6 +571,11 @@ def enrich_sales(sales: pd.DataFrame, vmap: pd.DataFrame, price_hist: pd.DataFra
     ph = price_hist if price_hist is not None else load_price_history()
     out = apply_effective_prices(out, vmap, ph)
 
+
+    # Compute Sales from Units and effective price (Units-only weekly uploads)
+    out["Units"] = pd.to_numeric(out.get("Units", 0), errors="coerce").fillna(0.0)
+    out["PriceEffective"] = pd.to_numeric(out.get("PriceEffective", np.nan), errors="coerce")
+    out["Sales"] = (out["Units"] * out["PriceEffective"]).fillna(0.0)
     return out
 
 def wow_mom_metrics(df: pd.DataFrame) -> dict:
