@@ -13,6 +13,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 DEFAULT_VENDOR_MAP = DATA_DIR / "vendor_map.xlsx"
 DEFAULT_SALES_STORE = DATA_DIR / "sales_store.csv"
+DEFAULT_PRICE_HISTORY = DATA_DIR / "price_history.csv"
 
 # -------------------------
 # Normalization
@@ -152,8 +153,236 @@ def load_sales_store() -> pd.DataFrame:
         df["Retailer"] = df["Retailer"].map(_normalize_retailer)
         df["SKU"] = df["SKU"].map(_normalize_sku)
         df["Units"] = pd.to_numeric(df["Units"], errors="coerce").fillna(0.0)
+        if "UnitPrice" in df.columns:
+            df["UnitPrice"] = pd.to_numeric(df["UnitPrice"], errors="coerce")
+        else:
+            df["UnitPrice"] = np.nan
         return df
-    return pd.DataFrame(columns=["Retailer","SKU","Units","StartDate","EndDate","SourceFile"])
+    return pd.DataFrame(columns=["Retailer","SKU","Units","UnitPrice","StartDate","EndDate","SourceFile"])
+
+
+
+# -------------------------
+# Price history (effective dating)
+# -------------------------
+def _normalize_price_retailer(x):
+    x = "" if x is None else str(x).strip()
+    if x == "" or x.lower() in {"all","*", "any"}:
+        return "*"
+    return _normalize_retailer(x)
+
+def load_price_history() -> pd.DataFrame:
+    """
+    Returns columns: Retailer, SKU, Price, StartDate (datetime64)
+    Retailer="*" means applies to all retailers for that SKU.
+    """
+    if DEFAULT_PRICE_HISTORY.exists():
+        ph = pd.read_csv(DEFAULT_PRICE_HISTORY)
+        # flexible column names
+        colmap = {c.lower(): c for c in ph.columns}
+        sku_col = colmap.get("sku") or colmap.get("sku#") or colmap.get("skunumber") or colmap.get("skuid")
+        price_col = colmap.get("price") or colmap.get("unitprice") or colmap.get("unit_price")
+        date_col = colmap.get("startdate") or colmap.get("start_date") or colmap.get("effective_date") or colmap.get("date")
+        ret_col = colmap.get("retailer")
+
+        if sku_col:
+            ph["SKU"] = ph[sku_col].map(_normalize_sku)
+        else:
+            ph["SKU"] = ""
+        if price_col:
+            ph["Price"] = pd.to_numeric(ph[price_col], errors="coerce")
+        else:
+            ph["Price"] = np.nan
+        if date_col:
+            ph["StartDate"] = pd.to_datetime(ph[date_col], errors="coerce")
+        else:
+            ph["StartDate"] = pd.NaT
+        if ret_col:
+            ph["Retailer"] = ph[ret_col].map(_normalize_price_retailer)
+        else:
+            ph["Retailer"] = "*"
+
+        ph = ph[["Retailer","SKU","Price","StartDate"]].dropna(subset=["SKU","Price","StartDate"])
+        ph = ph.sort_values(["Retailer","SKU","StartDate"]).reset_index(drop=True)
+        return ph
+    return pd.DataFrame(columns=["Retailer","SKU","Price","StartDate"])
+
+def save_price_history(ph: pd.DataFrame) -> None:
+    ph2 = ph.copy()
+    ph2["StartDate"] = pd.to_datetime(ph2["StartDate"], errors="coerce")
+    ph2 = ph2.dropna(subset=["Retailer","SKU","Price","StartDate"])
+    ph2["Retailer"] = ph2["Retailer"].map(_normalize_price_retailer)
+    ph2["SKU"] = ph2["SKU"].map(_normalize_sku)
+    ph2["Price"] = pd.to_numeric(ph2["Price"], errors="coerce")
+    ph2 = ph2.sort_values(["Retailer","SKU","StartDate"]).reset_index(drop=True)
+    ph2.to_csv(DEFAULT_PRICE_HISTORY, index=False)
+
+
+def _prepare_price_history_upload(new_rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Normalize a price history upload. Returns:
+      - normalized rows to consider (SKU, Retailer, StartDate, Price)
+      - rows ignored (for reporting)
+    Rules:
+      - Price blank/NaN => ignored
+      - Price <= 0 => ignored (treated as blank)
+      - Missing SKU or StartDate => ignored
+    """
+    n = new_rows.copy()
+
+    cols = {c.lower(): c for c in n.columns}
+    sku_col = cols.get("sku") or cols.get("sku#") or cols.get("skunumber") or cols.get("skuid")
+    price_col = cols.get("price") or cols.get("unitprice") or cols.get("unit_price")
+    date_col = cols.get("startdate") or cols.get("start_date") or cols.get("effective_date") or cols.get("date")
+    ret_col = cols.get("retailer")
+
+    if not sku_col or not price_col or not date_col:
+        raise ValueError("Price history upload must include SKU, Price, and StartDate columns.")
+
+    norm = pd.DataFrame({
+        "SKU": n[sku_col].map(_normalize_sku),
+        "Price": pd.to_numeric(n[price_col], errors="coerce"),
+        "StartDate": pd.to_datetime(n[date_col], errors="coerce"),
+        "Retailer": n[ret_col].map(_normalize_price_retailer) if ret_col else "*",
+    })
+
+    # Mark ignore reasons
+    ignored = norm.copy()
+    ignored["IgnoreReason"] = ""
+
+    ignored.loc[ignored["SKU"].isna() | (ignored["SKU"].astype(str).str.strip() == ""), "IgnoreReason"] = "Missing SKU"
+    ignored.loc[ignored["StartDate"].isna(), "IgnoreReason"] = np.where(ignored["IgnoreReason"] == "", "Missing StartDate", ignored["IgnoreReason"])
+    ignored.loc[ignored["Price"].isna(), "IgnoreReason"] = np.where(ignored["IgnoreReason"] == "", "Blank Price", ignored["IgnoreReason"])
+    ignored.loc[(ignored["Price"].notna()) & (ignored["Price"] <= 0), "IgnoreReason"] = np.where(ignored["IgnoreReason"] == "", "Price <= 0", ignored["IgnoreReason"])
+
+    keep = norm.dropna(subset=["SKU","StartDate","Price"]).copy()
+    keep = keep[keep["Price"] > 0].copy()
+
+    ignored = ignored[ignored["IgnoreReason"] != ""].copy()
+    keep = keep.reset_index(drop=True)
+    ignored = ignored.reset_index(drop=True)
+    return keep, ignored
+
+def _price_history_diff(cur: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+    """
+    Build a diff table for (Retailer, SKU, StartDate).
+    Actions: insert/update/noop
+    """
+    if cur is None or cur.empty:
+        base = incoming.copy()
+        base["OldPrice"] = np.nan
+        base["Action"] = "insert"
+        base["PriceDiff"] = np.nan
+        return base[["Retailer","SKU","StartDate","OldPrice","Price","PriceDiff","Action"]].sort_values(["Retailer","SKU","StartDate"])
+
+    cur2 = cur.copy()
+    cur2["StartDate"] = pd.to_datetime(cur2["StartDate"], errors="coerce")
+    inc = incoming.copy()
+    inc["StartDate"] = pd.to_datetime(inc["StartDate"], errors="coerce")
+
+    key = ["Retailer","SKU","StartDate"]
+    merged = inc.merge(cur2[key + ["Price"]].rename(columns={"Price":"OldPrice"}), on=key, how="left")
+    merged["PriceDiff"] = merged["Price"] - merged["OldPrice"]
+    merged["Action"] = np.where(merged["OldPrice"].isna(), "insert",
+                        np.where(np.isclose(merged["Price"], merged["OldPrice"], equal_nan=True), "noop", "update"))
+    return merged[key + ["OldPrice","Price","PriceDiff","Action"]].sort_values(key)
+
+def upsert_price_history(new_rows: pd.DataFrame) -> tuple[int, int, int]:
+    """
+    Upsert price history with effective dates.
+    Returns (inserted, updated, ignored_noop) counts for reporting.
+    """
+    cur = load_price_history()
+    incoming, _ignored = _prepare_price_history_upload(new_rows)
+
+    if incoming.empty:
+        return (0, 0, 0)
+
+    diff = _price_history_diff(cur, incoming)
+    to_apply = diff[diff["Action"].isin(["insert","update"])].copy()
+    noop = int((diff["Action"] == "noop").sum())
+
+    if to_apply.empty:
+        return (0, 0, noop)
+
+    apply_rows = to_apply[["Retailer","SKU","StartDate","Price"]].copy()
+
+    merged = pd.concat([cur, apply_rows], ignore_index=True) if (cur is not None and not cur.empty) else apply_rows.copy()
+    merged["StartDate"] = pd.to_datetime(merged["StartDate"], errors="coerce")
+    merged = merged.dropna(subset=["SKU","Price","StartDate"])
+    merged = merged.drop_duplicates(subset=["Retailer","SKU","StartDate"], keep="last")
+    merged = merged.sort_values(["Retailer","SKU","StartDate"]).reset_index(drop=True)
+    save_price_history(merged)
+
+    inserted = int((diff["Action"] == "insert").sum())
+    updated = int((diff["Action"] == "update").sum())
+    return (inserted, updated, noop)
+
+def apply_effective_prices(df_in: pd.DataFrame, vmap_in: pd.DataFrame, ph: pd.DataFrame) -> pd.DataFrame:
+    """
+    Adds PriceEffective and recomputes Sales using effective pricing:
+      - exact match on (Retailer, SKU) if present
+      - else wildcard Retailer="*" by SKU
+      - else fallback to vendor map Price
+    """
+    out = df_in.copy()
+    out["StartDate"] = pd.to_datetime(out["StartDate"], errors="coerce")
+
+    # fallback prices from vendor map already merged as out["Price"]
+    out["PriceEffective"] = out["Price"]
+
+    # If weekly sheet provided a UnitPrice (e.g., Depot/Lowe's), treat it as locked historical truth
+    if "UnitPrice" in out.columns:
+        out["PriceEffective"] = out["UnitPrice"].combine_first(out["PriceEffective"])
+
+    if ph is None or ph.empty or out.empty:
+        out["Sales"] = out["Units"] * out["PriceEffective"]
+        return out
+
+    ph2 = ph.copy()
+    ph2["StartDate"] = pd.to_datetime(ph2["StartDate"], errors="coerce")
+    ph2 = ph2.dropna(subset=["SKU","Price","StartDate"])
+
+    # exact retailer+sku
+    ph_exact = ph2[ph2["Retailer"] != "*"].sort_values(["Retailer","SKU","StartDate"])
+    base = out.sort_values(["Retailer","SKU","StartDate"])
+    if not ph_exact.empty:
+        exact = pd.merge_asof(
+            base,
+            ph_exact.rename(columns={"Price":"PHPrice"}),
+            by=["Retailer","SKU"],
+            left_on="StartDate",
+            right_on="StartDate",
+            direction="backward",
+            allow_exact_matches=True
+        )
+        base = exact
+        base["PriceEffective"] = base["PHPrice"].combine_first(base["PriceEffective"])
+        base = base.drop(columns=["PHPrice"], errors="ignore")
+
+    # wildcard by SKU
+    ph_wild = ph2[ph2["Retailer"] == "*"].sort_values(["SKU","StartDate"])
+    base = base.sort_values(["SKU","StartDate"])
+    if not ph_wild.empty:
+        wild = pd.merge_asof(
+            base,
+            ph_wild.rename(columns={"Price":"PHPrice"}),
+            by=["SKU"],
+            left_on="StartDate",
+            right_on="StartDate",
+            direction="backward",
+            allow_exact_matches=True
+        )
+        base = wild
+        base["PriceEffective"] = base["PHPrice"].combine_first(base["PriceEffective"])
+        base = base.drop(columns=["PHPrice"], errors="ignore")
+
+    # Ensure UnitPrice (from weekly sheet) always overrides effective pricing
+    if "UnitPrice" in base.columns:
+        base["PriceEffective"] = base["UnitPrice"].combine_first(base["PriceEffective"])
+
+    base["Sales"] = base["Units"] * base["PriceEffective"]
+    return base
 
 def upsert_sales(existing: pd.DataFrame, new_rows: pd.DataFrame) -> pd.DataFrame:
     if existing is None or existing.empty:
@@ -212,10 +441,14 @@ def read_weekly_workbook(uploaded_file, year: int) -> pd.DataFrame:
         raw = pd.read_excel(xls, sheet_name=sh, header=None)
         if raw.shape[1] < 2:
             continue
-        raw = raw.iloc[:, :2].copy()
-        raw.columns = ["SKU","Units"]
+        raw = raw.iloc[:, :3].copy() if raw.shape[1] >= 3 else raw.iloc[:, :2].copy()
+        raw.columns = ["SKU","Units","UnitPrice"] if raw.shape[1] == 3 else ["SKU","Units"]
         raw["SKU"] = raw["SKU"].map(_normalize_sku)
         raw["Units"] = pd.to_numeric(raw["Units"], errors="coerce").fillna(0.0)
+        if "UnitPrice" in raw.columns:
+            raw["UnitPrice"] = pd.to_numeric(raw["UnitPrice"], errors="coerce")
+        else:
+            raw["UnitPrice"] = np.nan
         raw = raw[raw["SKU"].astype(str).str.strip().ne("")]
 
         for _, r in raw.iterrows():
@@ -223,6 +456,7 @@ def read_weekly_workbook(uploaded_file, year: int) -> pd.DataFrame:
                 "Retailer": retailer,
                 "SKU": r["SKU"],
                 "Units": float(r["Units"]),
+                "UnitPrice": float(r["UnitPrice"]) if pd.notna(r.get("UnitPrice", np.nan)) else np.nan,
                 "StartDate": pd.to_datetime(sdt),
                 "EndDate": pd.to_datetime(edt),
                 "SourceFile": fname,
@@ -239,11 +473,13 @@ def read_weekly_workbook(uploaded_file, year: int) -> pd.DataFrame:
 # -------------------------
 # Enrichment / metrics
 # -------------------------
-def enrich_sales(sales: pd.DataFrame, vmap: pd.DataFrame) -> pd.DataFrame:
+def enrich_sales(sales: pd.DataFrame, vmap: pd.DataFrame, price_hist: pd.DataFrame | None = None) -> pd.DataFrame:
     s = sales.copy()
     s["Retailer"] = s["Retailer"].map(_normalize_retailer)
     s["SKU"] = s["SKU"].map(_normalize_sku)
     s["Units"] = pd.to_numeric(s["Units"], errors="coerce").fillna(0.0).astype(float)
+    s["StartDate"] = pd.to_datetime(s["StartDate"], errors="coerce")
+    s["EndDate"] = pd.to_datetime(s["EndDate"], errors="coerce")
 
     m = vmap[["Retailer","SKU","Vendor","Price","MapOrder"]].copy()
     m["Retailer"] = m["Retailer"].map(_normalize_retailer)
@@ -251,7 +487,11 @@ def enrich_sales(sales: pd.DataFrame, vmap: pd.DataFrame) -> pd.DataFrame:
     m["Price"] = pd.to_numeric(m["Price"], errors="coerce")
 
     out = s.merge(m, on=["Retailer","SKU"], how="left")
-    out["Sales"] = out["Units"] * out["Price"]
+
+    # Apply effective-dated pricing (if provided), otherwise fallback to vendor map price
+    ph = price_hist if price_hist is not None else load_price_history()
+    out = apply_effective_prices(out, vmap, ph)
+
     return out
 
 def wow_mom_metrics(df: pd.DataFrame) -> dict:
@@ -356,7 +596,8 @@ else:
     st.stop()
 
 sales_store = load_sales_store()
-df = enrich_sales(sales_store, vmap)
+price_hist = load_price_history()
+df = enrich_sales(sales_store, vmap, price_hist)
 
 # KPIs across top
 m_all = wow_mom_metrics(df)
@@ -1269,27 +1510,128 @@ with tab_edit_map:
 with tab_backup:
     st.subheader("Backup / Restore")
 
-    a, b = st.columns(2)
-    with a:
-        st.markdown("### Download Backup Database")
+    st.markdown("### Backup files")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.markdown("#### Sales database")
         if DEFAULT_SALES_STORE.exists():
             st.download_button("Download sales_store.csv", data=DEFAULT_SALES_STORE.read_bytes(), file_name="sales_store.csv", mime="text/csv")
         else:
-            st.info("No database yet.")
-    with b:
-        st.markdown("### Restore Backup Database")
-        up = st.file_uploader("Upload sales_store.csv", type=["csv"], key="restore_csv")
-        if st.button("Restore now", disabled=up is None):
+            st.info("No sales_store.csv yet.")
+
+        up = st.file_uploader("Restore sales_store.csv", type=["csv"], key="restore_sales_csv")
+        if st.button("Restore sales_store.csv", disabled=up is None, key="btn_restore_sales"):
             DEFAULT_SALES_STORE.write_bytes(up.getbuffer())
-            st.success("Restored. Reloading…")
+            st.success("Restored sales_store.csv. Reloading…")
+            st.rerun()
+
+    with c2:
+        st.markdown("#### Vendor map")
+        if DEFAULT_VENDOR_MAP.exists():
+            st.download_button("Download vendor_map.xlsx", data=DEFAULT_VENDOR_MAP.read_bytes(), file_name="vendor_map.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else:
+            st.info("No vendor_map.xlsx yet.")
+
+        up2 = st.file_uploader("Restore vendor_map.xlsx", type=["xlsx"], key="restore_vm_xlsx")
+        if st.button("Restore vendor_map.xlsx", disabled=up2 is None, key="btn_restore_vm"):
+            DEFAULT_VENDOR_MAP.write_bytes(up2.getbuffer())
+            st.success("Restored vendor_map.xlsx. Reloading…")
+            st.rerun()
+
+    with c3:
+        st.markdown("#### Price history")
+        if DEFAULT_PRICE_HISTORY.exists():
+            st.download_button("Download price_history.csv", data=DEFAULT_PRICE_HISTORY.read_bytes(), file_name="price_history.csv", mime="text/csv")
+        else:
+            st.info("No price_history.csv yet.")
+
+        up3 = st.file_uploader("Restore price_history.csv", type=["csv"], key="restore_ph_csv")
+        if st.button("Restore price_history.csv", disabled=up3 is None, key="btn_restore_ph"):
+            DEFAULT_PRICE_HISTORY.write_bytes(up3.getbuffer())
+            st.success("Restored price_history.csv. Reloading…")
             st.rerun()
 
     st.divider()
-    st.markdown("### Export Enriched Sales")
+
+    st.markdown("### Price changes (effective date)")
+    st.caption("Upload a sheet with SKU + Price + StartDate. Optional Retailer column. Prices apply from StartDate forward and never change earlier weeks.")
+
+    tmpl = pd.DataFrame([
+        {"Retailer":"*", "SKU":"ABC123", "Price": 19.99, "StartDate":"2026-02-01"},
+        {"Retailer":"home depot", "SKU":"XYZ999", "Price": 24.99, "StartDate":"2026-03-15"},
+    ])
+    st.download_button("Download template CSV", data=tmpl.to_csv(index=False).encode("utf-8"),
+                       file_name="price_history_template.csv", mime="text/csv")
+
+    ph_up = st.file_uploader("Upload price history (CSV or Excel)", type=["csv","xlsx"], key="ph_upload")
+    if ph_up is not None:
+        try:
+            if ph_up.name.lower().endswith(".csv"):
+                ph_new = pd.read_csv(ph_up)
+            else:
+                ph_new = pd.read_excel(ph_up)
+
+            st.markdown("#### Preview upload")
+            st.dataframe(ph_new.head(50), use_container_width=True, hide_index=True)
+
+            # Normalize + ignore blanks safely
+            cur_ph = load_price_history()
+            incoming, ignored = _prepare_price_history_upload(ph_new)
+            diff = _price_history_diff(cur_ph, incoming)
+
+            st.divider()
+            st.markdown("#### What will change")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Rows uploaded", int(len(ph_new)))
+            c2.metric("Rows ignored (blank/invalid)", int(len(ignored)))
+            c3.metric("Inserts", int((diff["Action"] == "insert").sum()) if not diff.empty else 0)
+            c4.metric("Updates", int((diff["Action"] == "update").sum()) if not diff.empty else 0)
+
+            show_diff = diff.copy()
+            if not show_diff.empty:
+                show_diff["StartDate"] = pd.to_datetime(show_diff["StartDate"], errors="coerce").dt.date
+                sty = show_diff.style.format({
+                    "OldPrice": lambda v: fmt_currency(v) if pd.notna(v) else "—",
+                    "Price": lambda v: fmt_currency(v),
+                    "PriceDiff": lambda v: fmt_currency(v) if pd.notna(v) else "—",
+                }).applymap(lambda v: "font-weight:700;" if str(v) in ["insert","update"] else "", subset=["Action"])
+                st.dataframe(sty, use_container_width=True, height=_table_height(show_diff, max_px=900), hide_index=True)
+
+                st.download_button("Download change preview (CSV)", data=show_diff.to_csv(index=False).encode("utf-8"),
+                                   file_name="price_history_changes_preview.csv", mime="text/csv")
+            else:
+                st.info("No valid rows found in this upload (all prices were blank/invalid).")
+
+            if not ignored.empty:
+                st.markdown("#### Ignored rows")
+                ign = ignored.copy()
+                ign["StartDate"] = pd.to_datetime(ign["StartDate"], errors="coerce").dt.date
+                st.dataframe(ign.head(200), use_container_width=True, height=_table_height(ign, max_px=600), hide_index=True)
+                st.download_button("Download ignored rows (CSV)", data=ign.to_csv(index=False).encode("utf-8"),
+                                   file_name="price_history_ignored_rows.csv", mime="text/csv")
+
+            if st.button("Apply price changes", key="btn_apply_prices"):
+                ins, upd, noop = upsert_price_history(ph_new)
+                st.success(f"Price history updated. Inserts: {ins}, Updates: {upd}, Unchanged: {noop}. Reloading…")
+                st.rerun()
+        except Exception as e:
+            st.error(f"Could not read this file: {e}")
+
+    if DEFAULT_PRICE_HISTORY.exists():
+        if st.button("Clear ALL price history", key="btn_clear_ph"):
+            DEFAULT_PRICE_HISTORY.unlink(missing_ok=True)
+            st.success("Cleared. Reloading…")
+            st.rerun()
+
+    st.divider()
+
+    st.markdown("### Export enriched sales")
     if not df.empty:
         ex = df.copy()
-        ex["StartDate"] = ex["StartDate"].dt.strftime("%Y-%m-%d")
-        ex["EndDate"] = ex["EndDate"].dt.strftime("%Y-%m-%d")
+        ex["StartDate"] = pd.to_datetime(ex["StartDate"], errors="coerce").dt.strftime("%Y-%m-%d")
+        ex["EndDate"] = pd.to_datetime(ex["EndDate"], errors="coerce").dt.strftime("%Y-%m-%d")
         st.download_button("Download enriched_sales.csv", data=ex.to_csv(index=False).encode("utf-8"),
                            file_name="enriched_sales.csv", mime="text/csv")
     else:
