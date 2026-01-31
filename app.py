@@ -370,6 +370,7 @@ def upsert_price_history(new_rows: pd.DataFrame) -> tuple[int, int, int]:
     return (inserted, updated, noop)
 
 
+
 def apply_effective_prices(base: pd.DataFrame, vmap: pd.DataFrame, ph: pd.DataFrame) -> pd.DataFrame:
     """
     Hybrid pricing:
@@ -377,9 +378,8 @@ def apply_effective_prices(base: pd.DataFrame, vmap: pd.DataFrame, ph: pd.DataFr
       2) Else, use effective-date price history (retailer-specific first, then wildcard '*' retailer for all).
       3) Else, fall back to vendor map Price.
 
-    Returns base with:
-      - PriceEffective
-      - Sales = Units * PriceEffective
+    Notes:
+      - merge_asof requires non-null, sorted datetime keys.
     """
     base = base.copy()
 
@@ -391,15 +391,79 @@ def apply_effective_prices(base: pd.DataFrame, vmap: pd.DataFrame, ph: pd.DataFr
 
     base["StartDate"] = pd.to_datetime(base["StartDate"], errors="coerce")
 
-    # Start with vendor-map price
+    # Start with vendor-map price, then let weekly UnitPrice override
     base["PriceEffective"] = base["Price"]
-
-    # UnitPrice from weekly sheet overrides everything
     base["PriceEffective"] = base["UnitPrice"].combine_first(base["PriceEffective"])
 
     # If no price history, finish
     if ph is None or ph.empty:
         return base
+
+    ph = ph.copy()
+    ph["StartDate"] = pd.to_datetime(ph["StartDate"], errors="coerce")
+    ph = ph.dropna(subset=["SKU", "StartDate", "Price"]).copy()
+    if ph.empty:
+        return base
+
+    # Normalize keys
+    if "Retailer" not in ph.columns:
+        ph["Retailer"] = "*"
+    ph["Retailer"] = ph["Retailer"].fillna("*").astype(str).str.strip()
+    ph["SKU"] = ph["SKU"].map(_normalize_sku)
+    base["SKU"] = base["SKU"].map(_normalize_sku)
+
+    # merge_asof cannot handle NaT in the 'on' key
+    base_valid = base[base["StartDate"].notna()].copy()
+    base_invalid = base[base["StartDate"].isna()].copy()
+
+    # Retailer-specific history (not '*')
+    ph_exact = ph[ph["Retailer"] != "*"].copy()
+    ph_star = ph[ph["Retailer"] == "*"].copy()
+
+    # Apply retailer-specific prices
+    if not ph_exact.empty and not base_valid.empty:
+        b1 = base_valid.sort_values(["Retailer", "SKU", "StartDate"], kind="mergesort").reset_index(drop=True)
+        p1 = ph_exact.sort_values(["Retailer", "SKU", "StartDate"], kind="mergesort").reset_index(drop=True)
+
+        exact = pd.merge_asof(
+            b1,
+            p1[["Retailer", "SKU", "StartDate", "Price"]].rename(columns={"Price": "PH_Price"}),
+            by=["Retailer", "SKU"],
+            on="StartDate",
+            direction="backward",
+            allow_exact_matches=True,
+        )
+
+        # Only use PH_Price when UnitPrice is missing
+        exact["PriceEffective"] = exact["UnitPrice"].combine_first(exact["PH_Price"]).combine_first(exact["PriceEffective"])
+        exact = exact.drop(columns=["PH_Price"], errors="ignore")
+        base_valid = exact
+
+    # Apply wildcard prices to rows still missing PriceEffective (and no UnitPrice)
+    if not ph_star.empty and not base_valid.empty:
+        missing = base_valid["UnitPrice"].isna() & base_valid["PriceEffective"].isna()
+        if missing.any():
+            b2 = base_valid.loc[missing].copy()
+            b2 = b2.sort_values(["SKU", "StartDate"], kind="mergesort").reset_index(drop=True)
+            p2 = ph_star.sort_values(["SKU", "StartDate"], kind="mergesort").reset_index(drop=True)
+
+            star = pd.merge_asof(
+                b2,
+                p2[["SKU", "StartDate", "Price"]].rename(columns={"Price": "PH_PriceStar"}),
+                by=["SKU"],
+                on="StartDate",
+                direction="backward",
+                allow_exact_matches=True,
+            )
+            base_valid.loc[missing, "PriceEffective"] = star["PH_PriceStar"].values
+
+    # Final: ensure UnitPrice still wins
+    if not base_valid.empty:
+        base_valid["PriceEffective"] = base_valid["UnitPrice"].combine_first(base_valid["PriceEffective"])
+
+    # Recombine
+    base_out = pd.concat([base_valid, base_invalid], ignore_index=True)
+    return base_out
 
     ph = ph.copy()
     ph["StartDate"] = pd.to_datetime(ph["StartDate"], errors="coerce")
