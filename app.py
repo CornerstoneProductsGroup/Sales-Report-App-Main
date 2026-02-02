@@ -2042,25 +2042,6 @@ with tab_bulk_upload:
         """
     )
 
-    upload_year = st.selectbox(
-        "Year for this bulk upload",
-        options=list(range(2018, date.today().year + 1)),
-        index=list(range(2018, date.today().year + 1)).index(2025),
-        key="bulk_year"
-    )
-
-    bulk_upload = st.file_uploader(
-        "Upload bulk data workbook (.xlsx)",
-        type=["xlsx"],
-        key="bulk_up"
-    )
-
-    if st.button("Ingest Bulk Workbook", disabled=bulk_upload is None):
-        new_rows = read_yow_workbook(bulk_upload, year=upload_year)
-        append_sales_to_store(new_rows)
-        st.success(f"Bulk workbook ingested for {upload_year}.")
-        st.rerun()
-
     st.subheader("Bulk Data Upload (Multi-week / Multi-month)")
 
     st.markdown(
@@ -2079,13 +2060,15 @@ with tab_bulk_upload:
     bulk_upload = st.file_uploader(
         "Upload bulk data workbook (.xlsx)",
         type=["xlsx"],
-        key="bulk_up"
+        key="bulk_up_tab"
     )
+
+    data_year = st.selectbox("Data Year (for header parsing)", options=list(range(this_year-5, this_year+2)), index=(list(range(this_year-5, this_year+2)).index(int(view_year)) if int(view_year) in list(range(this_year-5, this_year+2)) else 5), key="bulk_data_year")
 
     c1, c2 = st.columns([1, 3])
     with c1:
         if st.button("Ingest Bulk Workbook", disabled=bulk_upload is None):
-            new_rows = read_yow_workbook(bulk_upload, year=year)
+            new_rows = read_yow_workbook(bulk_upload, year=int(data_year))
             append_sales_to_store(new_rows)
             st.success("Bulk workbook ingested successfully.")
             st.rerun()
