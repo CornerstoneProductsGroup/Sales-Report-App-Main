@@ -951,6 +951,7 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks, avg_weeks):
     base = base.copy()
     base["StartDate"] = pd.to_datetime(base["StartDate"], errors="coerce")
     periods = sorted(base["StartDate"].dropna().dt.date.unique().tolist())
+    first_week = periods[0] if periods else None
     if not periods:
         return pd.DataFrame(), pd.DataFrame()
 
@@ -969,14 +970,32 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks, avg_weeks):
         units_p["Diff"] = 0.0
 
     avg_use = resolve_week_dates(use, avg_weeks)
+    # Ignore the very first week of the year (partial week)
+    if first_week is not None and avg_use:
+        avg_use = [w for w in avg_use if w != first_week]
     sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
     units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
+
+    # Diff vs Avg uses the last week displayed minus Avg
+    if use:
+        sales_p["Diff vs Avg"] = sales_p[use[-1]] - sales_p["Avg"]
+        units_p["Diff vs Avg"] = units_p[use[-1]] - units_p["Avg"]
+    else:
+        sales_p["Diff vs Avg"] = 0.0
+        units_p["Diff vs Avg"] = 0.0
 
     sales_p = sales_p.sort_index()
     units_p = units_p.sort_index()
 
     sales_p.loc["TOTAL"] = sales_p.sum(axis=0)
     units_p.loc["TOTAL"] = units_p.sum(axis=0)
+
+    # Recompute TOTAL Avg and Diff vs Avg from totals row values
+    if "Avg" in sales_p.columns and use:
+        sales_p.loc["TOTAL","Avg"] = sales_p.loc["TOTAL", [c for c in avg_use]].replace(0, np.nan).mean() if avg_use else 0.0
+        units_p.loc["TOTAL","Avg"] = units_p.loc["TOTAL", [c for c in avg_use]].replace(0, np.nan).mean() if avg_use else 0.0
+        sales_p.loc["TOTAL","Diff vs Avg"] = sales_p.loc["TOTAL", use[-1]] - sales_p.loc["TOTAL","Avg"]
+        units_p.loc["TOTAL","Diff vs Avg"] = units_p.loc["TOTAL", use[-1]] - units_p.loc["TOTAL","Avg"]
 
     def wlab(c):
         try:
@@ -1000,7 +1019,7 @@ with tab_retail_totals:
         st.info("No data yet.")
     else:
         st.markdown("### Sales ($) by Week")
-        st.dataframe(style_currency_cols(sales_t, diff_cols=["Diff"]), use_container_width=True, height=_table_height(sales_t), hide_index=True)
+        st.dataframe(style_currency_cols(sales_t, diff_cols=["Diff","Diff vs Avg"]), use_container_width=True, height=_table_height(sales_t), hide_index=True)
 
         st.markdown("### Units by Week")
         ud = units_t.copy()
@@ -1014,7 +1033,7 @@ with tab_retail_totals:
                 ud[c] = ud[c].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
         sty = ud.style
         if "Diff" in ud.columns:
-            sty = sty.applymap(lambda v: f"color: {_color(v)};", subset=["Diff"])
+            sty = sty.applymap(lambda v: f"color: {_color(v)};", subset=["Diff","Diff vs Avg"])
         fmt = {}
         for c in ud.columns:
             if c == first:
@@ -1036,7 +1055,7 @@ with tab_vendor_totals:
         st.info("No data yet.")
     else:
         st.markdown("### Sales ($) by Week")
-        st.dataframe(style_currency_cols(sales_t, diff_cols=["Diff"]), use_container_width=True, height=_table_height(sales_t, max_px=1400), hide_index=True)
+        st.dataframe(style_currency_cols(sales_t, diff_cols=["Diff","Diff vs Avg"]), use_container_width=True, height=_table_height(sales_t, max_px=1400), hide_index=True)
 
         st.markdown("### Units by Week")
         ud = units_t.copy()
@@ -1050,7 +1069,7 @@ with tab_vendor_totals:
                 ud[c] = ud[c].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
         sty = ud.style
         if "Diff" in ud.columns:
-            sty = sty.applymap(lambda v: f"color: {_color(v)};", subset=["Diff"])
+            sty = sty.applymap(lambda v: f"color: {_color(v)};", subset=["Diff","Diff vs Avg"])
         fmt = {}
         for c in ud.columns:
             if c == first:
@@ -1070,6 +1089,7 @@ with tab_unit_summary:
     d = df[df["Retailer"] == sel_r].copy()
     d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
     periods = sorted(d["StartDate"].dropna().dt.date.unique().tolist())
+    first_week = periods[0] if periods else None
     use = resolve_week_dates(periods, tf)
     if not use:
         st.info("No data for this retailer yet.")
@@ -1091,7 +1111,10 @@ with tab_unit_summary:
             else:
                 units_p["Diff"] = 0.0
             avg_use = resolve_week_dates(use, avgw)
+            if first_week is not None and avg_use:
+                avg_use = [w for w in avg_use if w != first_week]
             units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
+            units_p["Diff vs Avg"] = units_p[use[-1]] - units_p["Avg"] if use else 0.0
 
             units_p = units_p.rename(columns={c: pd.Timestamp(c).strftime("%m-%d") for c in use})
             units_out = units_p.reset_index()
@@ -1111,7 +1134,7 @@ with tab_unit_summary:
                     ud[c] = ud[c].map(lambda v: int(round(float(v))) if pd.notna(v) else 0)
             sty = ud.style
             if "Diff" in ud.columns:
-                sty = sty.applymap(lambda v: f"color: {_color(v)};", subset=["Diff"])
+                sty = sty.applymap(lambda v: f"color: {_color(v)};", subset=["Diff","Diff vs Avg"])
             fmt = {}
             for c in ud.columns:
                 if c == "SKU":
@@ -1131,7 +1154,10 @@ with tab_unit_summary:
             else:
                 sales_p["Diff"] = 0.0
             avg_use = resolve_week_dates(use, avgw)
+            if first_week is not None and avg_use:
+                avg_use = [w for w in avg_use if w != first_week]
             sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
+            sales_p["Diff vs Avg"] = sales_p[use[-1]] - sales_p["Avg"] if use else 0.0
 
             sales_p = sales_p.rename(columns={c: pd.Timestamp(c).strftime("%m-%d") for c in use})
             sales_out = sales_p.reset_index()
@@ -1142,7 +1168,7 @@ with tab_unit_summary:
             sales_out = pd.concat([sales_out, pd.DataFrame([total])], ignore_index=True)
 
             st.markdown("### Sales ($) by Week (per SKU)")
-            st.dataframe(style_currency_cols(sales_out, diff_cols=["Diff"]), use_container_width=True, height=_table_height(sales_out, max_px=1400), hide_index=True)
+            st.dataframe(style_currency_cols(sales_out, diff_cols=["Diff","Diff vs Avg"]), use_container_width=True, height=_table_height(sales_out, max_px=1400), hide_index=True)
 
 def monthly_totals(d: pd.DataFrame):
     if d.empty:
