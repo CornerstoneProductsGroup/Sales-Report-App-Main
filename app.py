@@ -1,11 +1,4 @@
 
-MONTH_NAME_TO_NUM = {
-    "January": 1, "February": 2, "March": 3, "April": 4,
-    "May": 5, "June": 6, "July": 7, "August": 8,
-    "September": 9, "October": 10, "November": 11, "December": 12
-}
-
-
 import pandas as pd
 def avg_ignore_zeros_cols(row, cols):
     """
@@ -51,6 +44,35 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
+
+MONTH_NAME_TO_NUM = {
+    "January": 1, "February": 2, "March": 3, "April": 4,
+    "May": 5, "June": 6, "July": 7, "August": 8,
+    "September": 9, "October": 10, "November": 11, "December": 12
+}
+
+AVG_WINDOW_OPTIONS = ["4 weeks","5 weeks","6 weeks","7 weeks","8 weeks","9 weeks","10 weeks","11 weeks","12 weeks",
+                      "January","February","March","April","May","June","July","August","September","October","November","December"]
+
+def resolve_avg_use(avg_window, use_cols, current_year):
+    """Return which week columns to use for averaging. Month choices are within current_year only."""
+    if not use_cols:
+        return []
+    if isinstance(avg_window, str) and avg_window in MONTH_NAME_TO_NUM:
+        mnum = MONTH_NAME_TO_NUM[avg_window]
+        dates = pd.to_datetime(use_cols, errors='coerce')
+        mask = (dates.dt.year == current_year) & (dates.dt.month == mnum)
+        cols = [c for c, ok in zip(use_cols, mask.fillna(False).tolist()) if ok]
+        return cols
+    # rolling weeks like '8 weeks'
+    if isinstance(avg_window, str) and 'week' in avg_window:
+        try:
+            n = int(avg_window.split()[0])
+        except Exception:
+            n = 4
+        return use_cols[-n:] if len(use_cols) >= n else use_cols
+    return use_cols
+
 
 APP_TITLE = "Sales Dashboard (Vendor Map + Weekly Sheets)"
 DATA_DIR = Path("data")
@@ -980,7 +1002,11 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks, avg_weeks):
     # Ignore the very first week of the year (partial week)
     if first_week is not None and avg_use:
         avg_use = [w for w in avg_use if w != first_week]
+    current_year = int(pd.to_datetime(d2["StartDate"], errors="coerce").dt.year.max()) if "d2" in locals() else int(pd.to_datetime(df["StartDate"], errors="coerce").dt.year.max())
+    avg_use = resolve_avg_use(avg_window, use, current_year)
     sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
+    current_year = int(pd.to_datetime(d2["StartDate"], errors="coerce").dt.year.max()) if "d2" in locals() else int(pd.to_datetime(df["StartDate"], errors="coerce").dt.year.max())
+    avg_use = resolve_avg_use(avg_window, use, current_year)
     units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
 
     # Diff vs Avg uses the last week displayed minus Avg
@@ -1019,7 +1045,7 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks, avg_weeks):
 with tab_retail_totals:
     st.subheader("Retailer Totals")
     tf = st.selectbox("Timeframe", options=[2,4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=1, key="rt_tf")
-    avgw = st.selectbox("Average window", options=[4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=0, key="rt_avg")
+    avgw = st.selectbox("Average window", options=AVG_WINDOW_OPTIONS, index=0, key="rt_avg")
 
     sales_t, units_t = make_totals_tables(df, "Retailer", tf, avgw)
     if sales_t.empty:
@@ -1053,7 +1079,7 @@ with tab_retail_totals:
 with tab_vendor_totals:
     st.subheader("Vendor Totals")
     tf = st.selectbox("Timeframe", options=[2,4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=1, key="vt_tf")
-    avgw = st.selectbox("Average window", options=[4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=0, key="vt_avg")
+    avgw = st.selectbox("Average window", options=AVG_WINDOW_OPTIONS, index=0, key="vt_avg")
 
     base = df.copy()
     base["Vendor"] = base["Vendor"].fillna("Unmapped")
@@ -1091,7 +1117,7 @@ with tab_unit_summary:
     retailers = sorted(vmap["Retailer"].dropna().unique().tolist())
     sel_r = st.selectbox("Retailer", options=retailers, index=0, key="us_retailer")
     tf = st.selectbox("Timeframe", options=[2,4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=1, key="us_tf")
-    avgw = st.selectbox("Average window", options=[4,8,12,"4 months", "5 months", "6 months", "7 months", "8 months", "9 months", "10 months", "11 months", "12 months"], index=0, key="us_avg")
+    avgw = st.selectbox("Average window", options=AVG_WINDOW_OPTIONS, index=0, key="us_avg")
 
     d = df[df["Retailer"] == sel_r].copy()
     d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
