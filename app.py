@@ -900,6 +900,7 @@ with st.sidebar:
 
     this_year = date.today().year
     year = st.selectbox("Year (for filename date parsing)", options=list(range(this_year-3, this_year+2)), index=3)
+    view_year = st.selectbox("View Year (dashboard)", options=list(range(this_year-3, this_year+2)), index=3, key="view_year")
 
     st.subheader("Vendor Map")
     vm_upload = st.file_uploader("Upload Vendor Map (.xlsx)", type=["xlsx"], key="vm_up")
@@ -928,6 +929,10 @@ with st.sidebar:
             DEFAULT_SALES_STORE.unlink()
         st.warning("Sales store cleared.")
         st.rerun()
+
+
+# Ensure view_year exists for downstream tabs
+view_year = st.session_state.get('view_year', year)
 
 # Load vendor map
 if vm_upload is not None:
