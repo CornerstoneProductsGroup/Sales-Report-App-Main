@@ -1645,7 +1645,6 @@ with tab_compare:
                 "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
             }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
 
-            st.caption(f"Year: {sel_year} | A: {', '.join(a_pick)} | B: {', '.join(b_pick)}")
             st.dataframe(sty, use_container_width=True, hide_index=True)
 # -------------------------
 # Run-Rate Forecast
