@@ -685,6 +685,131 @@ def read_weekly_workbook(uploaded_file, year: int) -> pd.DataFrame:
         out["EndDate"] = pd.to_datetime(out["EndDate"], errors="coerce")
     return out
 
+
+# -------------------------
+# Year-Overview (YOW) workbook ingestion
+# -------------------------
+def parse_week_range_header(val, year: int):
+    """Parse headers like '1-1 / 1-3' into (StartDate, EndDate) timestamps.
+    Accepts a few common variants and handles year-crossing weeks (e.g. '12-29 / 1-2').
+    """
+    if val is None:
+        return (None, None)
+    s = str(val).strip()
+    if s == "":
+        return (None, None)
+
+    # Common: 'M-D / M-D' or 'M/D - M/D'
+    m = re.search(r"(\d{1,2})\s*[-/]\s*(\d{1,2})\s*(?:/|to|–|-)+\s*(\d{1,2})\s*[-/]\s*(\d{1,2})", s)
+    if not m:
+        # Variant with explicit months: '1-1 / 1-3' (same as above but stricter)
+        m = re.search(r"(\d{1,2})-(\d{1,2})\s*/\s*(\d{1,2})-(\d{1,2})", s)
+    if not m:
+        return (None, None)
+
+    mo1, d1, mo2, d2 = map(int, m.groups())
+    y1 = int(year)
+    y2 = int(year)
+    # If the end month is earlier than start month, assume it crosses into next year
+    if mo2 < mo1:
+        y2 = y1 + 1
+
+    try:
+        sdt = pd.Timestamp(y1, mo1, d1)
+        edt = pd.Timestamp(y2, mo2, d2)
+        return (sdt, edt)
+    except Exception:
+        return (None, None)
+
+def read_yow_workbook(uploaded_file, year: int) -> pd.DataFrame:
+    """Read a Year Overview workbook:
+    - One sheet per retailer OR a single sheet where A1 is the retailer name.
+    - Row 1 contains week ranges across the top (starting in column B).
+    - Column A contains SKUs (starting row 2).
+    - Cells contain Units.
+    """
+    import openpyxl
+
+    fname = getattr(uploaded_file, "name", "yow.xlsx")
+
+    # openpyxl is fastest/most tolerant for wide sheets
+    wb = openpyxl.load_workbook(uploaded_file, data_only=True, read_only=True, keep_links=False)
+
+    rows_out = []
+
+    for sh in wb.sheetnames:
+        ws = wb[sh]
+
+        # Retailer name: A1 (preferred). If blank, fall back to sheet name.
+        retailer_name = ws["A1"].value
+        retailer = _normalize_retailer(retailer_name if retailer_name not in [None, ""] else sh)
+
+        # Header row: week ranges from B1 onward until blank
+        week_cols = []
+        col = 2  # B
+        while True:
+            v = ws.cell(row=1, column=col).value
+            if v is None or str(v).strip() == "":
+                break
+            sdt, edt = parse_week_range_header(v, year=year)
+            if sdt is None:
+                # Try interpreting as a date (week start) if someone uses real date headers
+                dt = pd.to_datetime(v, errors="coerce")
+                if pd.notna(dt):
+                    sdt = pd.Timestamp(dt).normalize()
+                    edt = sdt + pd.Timedelta(days=6)
+                else:
+                    # stop if header isn't parseable
+                    break
+            if edt is None:
+                edt = sdt + pd.Timedelta(days=6)
+            week_cols.append((col, pd.Timestamp(sdt), pd.Timestamp(edt), str(v).strip()))
+            col += 1
+
+        if not week_cols:
+            continue
+
+        # Data rows: SKUs down column A from row 2 until blank
+        row = 2
+        while True:
+            sku = ws.cell(row=row, column=1).value
+            if sku is None or str(sku).strip() == "":
+                break
+            sku = _normalize_sku(sku)
+
+            for (cidx, sdt, edt, hdr) in week_cols:
+                units = ws.cell(row=row, column=cidx).value
+                if units is None or (isinstance(units, str) and units.strip() == ""):
+                    continue
+                try:
+                    u = float(units)
+                except Exception:
+                    continue
+                if np.isnan(u) or u == 0:
+                    continue
+
+                rows_out.append({
+                    "Retailer": retailer,
+                    "SKU": sku,
+                    "Units": float(u),
+                    "UnitPrice": np.nan,          # use current pricing (vendor map / price history)
+                    "StartDate": pd.to_datetime(sdt),
+                    "EndDate": pd.to_datetime(edt),
+                    "SourceFile": f"{fname}::{sh}",
+                })
+
+            row += 1
+
+    out = pd.DataFrame(rows_out)
+    if not out.empty:
+        out["Retailer"] = out["Retailer"].map(_normalize_retailer)
+        out["SKU"] = out["SKU"].map(_normalize_sku)
+        out["StartDate"] = pd.to_datetime(out["StartDate"], errors="coerce")
+        out["EndDate"] = pd.to_datetime(out["EndDate"], errors="coerce")
+        out["Units"] = pd.to_numeric(out["Units"], errors="coerce").fillna(0.0)
+        out["UnitPrice"] = pd.to_numeric(out["UnitPrice"], errors="coerce")
+    return out
+
 # -------------------------
 # Enrichment / metrics
 # -------------------------
@@ -795,6 +920,15 @@ with st.sidebar:
             new_rows = read_weekly_workbook(f, year=year)
             append_sales_to_store(new_rows)
         st.success("Ingested uploads into the sales store.")
+        st.rerun()
+
+
+    st.subheader("YOW / Year Overview (Fast Upload)")
+    yow_upload = st.file_uploader("Upload YOW workbook (.xlsx)", type=["xlsx"], key="yow_up")
+    if st.button("Ingest YOW (uses current pricing)", disabled=yow_upload is None):
+        new_rows = read_yow_workbook(yow_upload, year=year)
+        append_sales_to_store(new_rows)
+        st.success("Ingested YOW workbook into the sales store.")
         st.rerun()
 
     st.divider()
