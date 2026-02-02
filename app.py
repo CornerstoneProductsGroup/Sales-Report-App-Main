@@ -1,4 +1,41 @@
 
+def avg_ignore_zeros_cols(row: pd.Series, cols: list[str]) -> float:
+    """
+    Average of columns in row ignoring zeros/NaN, and ignoring the earliest week column.
+    """
+    use_cols = _week_cols_excluding_first(row.to_frame().T, cols)
+    vals = []
+    for c in use_cols:
+        v = row.get(c, np.nan)
+        if pd.isna(v):
+            continue
+        try:
+            fv = float(v)
+        except Exception:
+            continue
+        if fv == 0:
+            continue
+        vals.append(fv)
+    return float(np.mean(vals)) if vals else 0.0
+
+
+def _week_cols_excluding_first(df: pd.DataFrame, week_cols: list[str]) -> list[str]:
+    """
+    Remove the earliest week column from week_cols (to ignore partial first week).
+    Uses parsed week start date from the column name when possible.
+    """
+    if not week_cols:
+        return week_cols
+    parsed = [pd.to_datetime(c, errors="coerce") for c in week_cols]
+    if all(pd.isna(p) for p in parsed):
+        return week_cols[1:] if len(week_cols) > 1 else week_cols
+    pairs = [(c, p) for c, p in zip(week_cols, parsed) if pd.notna(p)]
+    if not pairs:
+        return week_cols[1:] if len(week_cols) > 1 else week_cols
+    earliest = min(pairs, key=lambda x: x[1])[0]
+    return [c for c in week_cols if c != earliest]
+
+
 import re
 from pathlib import Path
 from datetime import date, timedelta
@@ -1199,11 +1236,11 @@ with tab_wow_exc:
             st.info("Need at least two weeks of data to compute changes.")
         else:
             # N = number of prior weeks used to compute the baseline average (excluding the most recent week)
-            n_prior = st.selectbox("Baseline average over prior N weeks", options=[1,2,3,4,5], index=1, key="wow_nprior")
+            n_prior = st.selectbox("Baseline average over prior window", options=["1 week","2 weeks","3 weeks","4 weeks","5 weeks","6 weeks","7 weeks","8 weeks","3 months","6 months"], index=3, key="wow_nprior")
             direction = st.selectbox("Direction", options=["Increase", "Decrease"], index=0, key="wow_dir")
             thresh = st.selectbox(
                 "Percent threshold",
-                options=[0.05,0.10,0.15,0.20,0.25,0.30,0.40,0.50],
+                options=[0.05,0.10,0.15,0.20,0.25,0.30,0.40,0.50,0.60,0.70,0.80,0.90,1.00,1.50],
                 index=3,
                 format_func=lambda x: f"{int(x*100)}%",
                 key="wow_thresh2"
@@ -1227,7 +1264,20 @@ with tab_wow_exc:
             else:
                 end_week = weeks_all2[-1]
                 prior_weeks = weeks_all2[:-1]
-                prior_weeks = prior_weeks[-n_prior:] if len(prior_weeks) >= n_prior else prior_weeks
+
+                # Determine prior window based on selector (excluding most recent week)
+                sel = n_prior
+                if isinstance(sel, str) and "month" in sel:
+                    nmo = int(sel.split()[0])
+                    tmp = d2[d2["Week"].isin(prior_weeks)].copy()
+                    tmp["MonthP"] = pd.to_datetime(tmp["StartDate"], errors="coerce").dt.to_period("M")
+                    months = sorted(tmp["MonthP"].dropna().unique().tolist())
+                    usem = months[-nmo:] if len(months) >= nmo else months
+                    tmp = tmp[tmp["MonthP"].isin(usem)]
+                    prior_weeks = sorted(tmp["Week"].dropna().unique().tolist())
+                else:
+                    nw = int(str(sel).split()[0])
+                    prior_weeks = prior_weeks[-nw:] if len(prior_weeks) >= nw else prior_weeks
 
                 weekly = d2.groupby(["Retailer","Vendor","SKU","Week"], as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum"))
 
