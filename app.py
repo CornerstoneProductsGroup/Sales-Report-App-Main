@@ -1144,9 +1144,9 @@ with tab_unit_summary:
                 units_p["Diff"] = units_p[use[-1]] - units_p[use[-2]]
             else:
                 units_p["Diff"] = 0.0
-            avg_use = resolve_week_dates(use, avgw)
+    avg_use = resolve_week_dates(use, avgw)
             if first_week is not None and avg_use:
-                avg_use = [w for w in avg_use if w != first_week]
+    avg_use = [w for w in avg_use if w != first_week]
             units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
             units_p["Diff vs Avg"] = units_p[use[-1]] - units_p["Avg"] if use else 0.0
 
@@ -1187,9 +1187,9 @@ with tab_unit_summary:
                 sales_p["Diff"] = sales_p[use[-1]] - sales_p[use[-2]]
             else:
                 sales_p["Diff"] = 0.0
-            avg_use = resolve_week_dates(use, avgw)
+    avg_use = resolve_week_dates(use, avgw)
             if first_week is not None and avg_use:
-                avg_use = [w for w in avg_use if w != first_week]
+    avg_use = [w for w in avg_use if w != first_week]
             sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
             sales_p["Diff vs Avg"] = sales_p[use[-1]] - sales_p["Avg"] if use else 0.0
 
