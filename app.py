@@ -939,15 +939,15 @@ tabs = st.tabs([
     "Unit Summary",
     "Executive Summary",
     "WoW Exceptions",
-    "Trends",
-    "Velocity Analysis",
+    "Comparison",
     "Run-Rate Forecast",
     "No Sales SKUs",
     "Edit Vendor Map",
     "Backup / Restore",
 ])
-(tab_retail_totals, tab_vendor_totals, tab_unit_summary, tab_exec, tab_wow_exc, tab_trends, tab_velocity,
- tab_runrate, tab_no_sales, tab_edit_map, tab_backup) = tabs
+(tab_retail_totals, tab_vendor_totals, tab_unit_summary, tab_exec, tab_wow_exc,
+ tab_compare, tab_runrate, tab_no_sales, tab_edit_map, tab_backup) = tabs
+
 
 
 
@@ -1407,118 +1407,119 @@ with tab_wow_exc:
                         )
                         st.dataframe(sty, use_container_width=True, height=_table_height(t, max_px=1200), hide_index=True)
 
-# -------------------------
-# Trends
-# -------------------------
-with tab_trends:
-    st.subheader("Trends")
 
+
+# -------------------------
+# Comparison
+# -------------------------
+with tab_compare:
+    st.subheader("Comparison (Month vs Month / Multi-month)")
     if df.empty:
         st.info("No sales data yet.")
     else:
-        view = st.selectbox("View by", options=["All", "Retailer", "Vendor", "SKU"], index=0, key="tr_view")
-        tf = st.selectbox("Timeframe", options=[8, 12, 26], index=1, key="tr_tf")
-        metric = st.selectbox("Metric", options=["Units", "Sales"], index=0, key="tr_metric")
+        d = df.copy()
+        d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+        d = d[d["StartDate"].notna()].copy()
+        d["MonthP"] = d["StartDate"].dt.to_period("M")
 
-        d = add_week_col(df)
-        weeks = last_n_weeks(d, tf)
-        d = d[d["Week"].isin(weeks)].copy()
+        months = sorted(d["MonthP"].dropna().unique().tolist())
+        month_labels = [m.to_timestamp().strftime("%B %Y") for m in months]
+        label_to_period = {lab: per for lab, per in zip(month_labels, months)}
 
-        if view == "Retailer":
-            opts = sorted(vmap["Retailer"].dropna().unique().tolist())
-            pick = st.selectbox("Retailer", options=opts, index=0, key="tr_pick_r")
-            d = d[d["Retailer"] == pick]
-        elif view == "Vendor":
-            opts = sorted([v for v in vmap["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
-            pick = st.selectbox("Vendor", options=opts, index=0, key="tr_pick_v")
-            d = d[d["Vendor"] == pick]
-        elif view == "SKU":
-            r_opts = sorted(vmap["Retailer"].dropna().unique().tolist())
-            r_pick = st.selectbox("Retailer (for SKU list)", options=r_opts, index=0, key="tr_sku_r")
-            sku_order = vmap[vmap["Retailer"] == r_pick].sort_values("MapOrder")["SKU"].tolist()
-            pick = st.selectbox("SKU", options=sku_order, index=0, key="tr_pick_sku")
-            d = d[(d["Retailer"] == r_pick) & (d["SKU"] == pick)]
+        c1, c2, c3 = st.columns([2,2,1])
+        with c1:
+            a_pick = st.multiselect(
+                "Selection A (one or more months)",
+                options=month_labels,
+                default=month_labels[-1:] if len(month_labels) >= 1 else [],
+                key="cmp_a_months"
+            )
+        with c2:
+            b_pick = st.multiselect(
+                "Selection B (one or more months)",
+                options=month_labels,
+                default=month_labels[-2:-1] if len(month_labels) >= 2 else [],
+                key="cmp_b_months"
+            )
+        with c3:
+            by = st.selectbox("Compare by", options=["Retailer", "Vendor"], index=0, key="cmp_by")
 
-        agg = d.groupby("Week", as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum")).sort_values("Week")
-        if agg.empty:
-            st.info("No data for this selection/timeframe.")
+        # Optional filter list
+        if by == "Retailer":
+            options = sorted(d["Retailer"].dropna().unique().tolist())
         else:
-            agg["Week"] = agg["Week"].map(lambda x: pd.Timestamp(x).strftime("%m-%d"))
-            chart_df = agg.set_index("Week")[[metric]]
-            st.line_chart(chart_df, height=320)
+            options = sorted([v for v in d["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
+        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, default=[], key="cmp_limit")
 
-            if st.checkbox("Show rolling 4-week average", value=False, key="tr_roll"):
-                roll = chart_df.rolling(4, min_periods=1).mean()
-                st.line_chart(roll, height=320)
+        a_periods = [label_to_period[x] for x in a_pick if x in label_to_period]
+        b_periods = [label_to_period[x] for x in b_pick if x in label_to_period]
 
-            st.markdown("### Weekly totals")
-            if metric == "Sales":
-                st.dataframe(chart_df.reset_index().style.format({metric: lambda v: fmt_currency(v)}),
-                             use_container_width=True, height=_table_height(chart_df.reset_index(), max_px=900), hide_index=True)
-            else:
-                t = chart_df.reset_index()
-                t[metric] = t[metric].map(lambda v: int(round(float(v))))
-                st.dataframe(t.style.format({metric: lambda v: fmt_int(v)}),
-                             use_container_width=True, height=_table_height(t, max_px=900), hide_index=True)
-
-# -------------------------
-# Velocity Analysis
-# -------------------------
-with tab_velocity:
-    st.subheader("Velocity Analysis")
-
-    if df.empty:
-        st.info("No sales data yet.")
-    else:
-        tf = st.selectbox("Lookback window (weeks)", options=[8, 12, 26], index=1, key="vel_tf")
-        level = st.selectbox("Level", options=["Retailer", "Vendor"], index=0, key="vel_level")
-
-        high = st.number_input("High velocity threshold (avg weekly units)", value=20.0, step=1.0)
-        med = st.number_input("Medium velocity threshold", value=10.0, step=1.0)
-        low = st.number_input("Low velocity threshold", value=1.0, step=1.0)
-
-        d = add_week_col(df)
-        weeks = last_n_weeks(d, tf)
-        d = d[d["Week"].isin(weeks)].copy()
-
-        grp_cols = [level, "SKU"]
-        base = d.groupby(grp_cols + ["Week"], as_index=False).agg(Units=("Units","sum"))
-        piv = base.pivot_table(index=grp_cols, columns="Week", values="Units", aggfunc="sum", fill_value=0.0)
-        avg = nonzero_mean_rowwise(piv).fillna(0.0)
-
-        out = avg.reset_index().rename(columns={0:"AvgUnits"})
-        out["Bucket"] = np.select(
-            [out["AvgUnits"] >= high, out["AvgUnits"] >= med, out["AvgUnits"] >= low],
-            ["High", "Medium", "Low"],
-            default="Dead"
-        )
-
-        st.markdown("### Bucket counts")
-        summary = out.groupby([level, "Bucket"], as_index=False).size().rename(columns={"size":"SKU Count"})
-        st.dataframe(summary.sort_values([level, "Bucket"]), use_container_width=True, height=_table_height(summary, max_px=900), hide_index=True)
-
-        st.markdown("### SKU detail")
-        pick_bucket = st.selectbox("Bucket", options=["High","Medium","Low","Dead"], index=0, key="vel_bucket")
-        detail = out[out["Bucket"] == pick_bucket].copy()
-
-        if level == "Retailer":
-            opts = sorted(vmap["Retailer"].dropna().unique().tolist())
+        if not a_periods or not b_periods:
+            st.info("Pick at least one month in Selection A and Selection B.")
         else:
-            opts = sorted([v for v in vmap["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
-        pick_group = st.selectbox(level, options=["All"] + opts, index=0, key="vel_group")
-        if pick_group != "All":
-            detail = detail[detail[level] == pick_group]
+            group_col = by
 
-        if level == "Retailer" and pick_group != "All":
-            sku_order = vmap[vmap["Retailer"] == pick_group].sort_values("MapOrder")["SKU"].tolist()
-            detail["Order"] = detail["SKU"].apply(lambda s: sku_order.index(s) if s in sku_order else 999999)
-            detail = detail.sort_values(["Order","SKU"]).drop(columns=["Order"])
-        else:
-            detail = detail.sort_values(["AvgUnits","SKU"], ascending=[False, True])
+            da = d[d["MonthP"].isin(a_periods)].copy()
+            db = d[d["MonthP"].isin(b_periods)].copy()
 
-        detail["AvgUnits"] = detail["AvgUnits"].round(2)
-        st.dataframe(detail[[level,"SKU","AvgUnits"]], use_container_width=True, height=_table_height(detail, max_px=1100), hide_index=True)
+            if sel:
+                da = da[da[group_col].isin(sel)]
+                db = db[db[group_col].isin(sel)]
 
+            ga = da.groupby(group_col, as_index=False).agg(
+                Units_A=("Units", "sum"),
+                Sales_A=("Sales", "sum"),
+            )
+            gb = db.groupby(group_col, as_index=False).agg(
+                Units_B=("Units", "sum"),
+                Sales_B=("Sales", "sum"),
+            )
+
+            out = ga.merge(gb, on=group_col, how="outer").fillna(0.0)
+            out["Units_Diff"] = out["Units_A"] - out["Units_B"]
+            out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
+            out["Units_%"] = out["Units_Diff"] / out["Units_B"].replace(0, np.nan)
+            out["Sales_%"] = out["Sales_Diff"] / out["Sales_B"].replace(0, np.nan)
+
+            # Totals row
+            total = {
+                group_col: "TOTAL",
+                "Units_A": float(out["Units_A"].sum()),
+                "Sales_A": float(out["Sales_A"].sum()),
+                "Units_B": float(out["Units_B"].sum()),
+                "Sales_B": float(out["Sales_B"].sum()),
+            }
+            total["Units_Diff"] = total["Units_A"] - total["Units_B"]
+            total["Sales_Diff"] = total["Sales_A"] - total["Sales_B"]
+            total["Units_%"] = (total["Units_Diff"] / total["Units_B"]) if total["Units_B"] else np.nan
+            total["Sales_%"] = (total["Sales_Diff"] / total["Sales_B"]) if total["Sales_B"] else np.nan
+
+            out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
+
+            sort_by = st.selectbox(
+                "Sort by",
+                options=["Sales_Diff", "Units_Diff", "Sales_A", "Sales_B", "Units_A", "Units_B"],
+                index=0,
+                key="cmp_sort"
+            )
+            ascending = st.checkbox("Ascending", value=False, key="cmp_sort_asc")
+            out = out.sort_values(sort_by, ascending=ascending, kind="mergesort")
+
+            st.caption(f"Selection A: {', '.join(a_pick)}  |  Selection B: {', '.join(b_pick)}")
+
+            disp = out[[group_col, "Units_A", "Sales_A", "Units_B", "Sales_B", "Units_Diff", "Units_%", "Sales_Diff", "Sales_%"]].copy()
+            sty = disp.style.format({
+                "Units_A": lambda v: fmt_int(v),
+                "Units_B": lambda v: fmt_int(v),
+                "Units_Diff": lambda v: fmt_int(v),
+                "Units_%": lambda v: f"{(v*100):.1f}%" if pd.notna(v) else "—",
+                "Sales_A": lambda v: fmt_currency(v),
+                "Sales_B": lambda v: fmt_currency(v),
+                "Sales_Diff": lambda v: fmt_currency(v),
+                "Sales_%": lambda v: f"{(v*100):.1f}%" if pd.notna(v) else "—",
+            }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff", "Sales_Diff"])
+
+            st.dataframe(sty, use_container_width=True, height=_table_height(disp, max_px=1400), hide_index=True)
 
 # -------------------------
 # Run-Rate Forecast
