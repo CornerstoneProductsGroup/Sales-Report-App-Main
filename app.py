@@ -1536,29 +1536,42 @@ with tab_wow_exc:
 
 
 
+
 # -------------------------
 # Comparison
 # -------------------------
 with tab_compare:
     st.subheader("Comparison (Month vs Month / Multi-month)")
+
     if df.empty:
         st.info("No sales data yet.")
     else:
         d = df.copy()
         d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
         d = d[d["StartDate"].notna()].copy()
+
+        # Year selector (prevents bulk uploads from affecting current views)
+        years = sorted(d["StartDate"].dt.year.unique().tolist())
+        sel_year = st.selectbox(
+            "Select year",
+            options=years,
+            index=years.index(2025) if 2025 in years else len(years) - 1,
+            key="cmp_year"
+        )
+
+        d = d[d["StartDate"].dt.year == sel_year].copy()
         d["MonthP"] = d["StartDate"].dt.to_period("M")
 
-        months = sorted(d["MonthP"].dropna().unique().tolist())
+        months = sorted(d["MonthP"].unique().tolist())
         month_labels = [m.to_timestamp().strftime("%B %Y") for m in months]
-        label_to_period = {lab: per for lab, per in zip(month_labels, months)}
+        label_to_period = dict(zip(month_labels, months))
 
-        c1, c2, c3 = st.columns([2,2,1])
+        c1, c2, c3 = st.columns([2, 2, 1])
         with c1:
             a_pick = st.multiselect(
                 "Selection A (one or more months)",
                 options=month_labels,
-                default=month_labels[-1:] if len(month_labels) >= 1 else [],
+                default=month_labels[-1:] if month_labels else [],
                 key="cmp_a_months"
             )
         with c2:
@@ -1569,14 +1582,14 @@ with tab_compare:
                 key="cmp_b_months"
             )
         with c3:
-            by = st.selectbox("Compare by", options=["Retailer", "Vendor"], index=0, key="cmp_by")
+            by = st.selectbox("Compare by", ["Retailer", "Vendor"], key="cmp_by")
 
-        # Optional filter list
         if by == "Retailer":
             options = sorted(d["Retailer"].dropna().unique().tolist())
         else:
-            options = sorted([v for v in d["Vendor"].dropna().unique().tolist() if str(v).strip() != ""])
-        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, default=[], key="cmp_limit")
+            options = sorted([v for v in d["Vendor"].dropna().unique().tolist() if str(v).strip()])
+
+        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, key="cmp_limit")
 
         a_periods = [label_to_period[x] for x in a_pick if x in label_to_period]
         b_periods = [label_to_period[x] for x in b_pick if x in label_to_period]
@@ -1584,70 +1597,50 @@ with tab_compare:
         if not a_periods or not b_periods:
             st.info("Pick at least one month in Selection A and Selection B.")
         else:
-            group_col = by
-
-            da = d[d["MonthP"].isin(a_periods)].copy()
-            db = d[d["MonthP"].isin(b_periods)].copy()
+            da = d[d["MonthP"].isin(a_periods)]
+            db = d[d["MonthP"].isin(b_periods)]
 
             if sel:
-                da = da[da[group_col].isin(sel)]
-                db = db[db[group_col].isin(sel)]
+                da = da[da[by].isin(sel)]
+                db = db[db[by].isin(sel)]
 
-            ga = da.groupby(group_col, as_index=False).agg(
-                Units_A=("Units", "sum"),
-                Sales_A=("Sales", "sum"),
-            )
-            gb = db.groupby(group_col, as_index=False).agg(
-                Units_B=("Units", "sum"),
-                Sales_B=("Sales", "sum"),
-            )
+            ga = da.groupby(by, as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
+            gb = db.groupby(by, as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
 
-            out = ga.merge(gb, on=group_col, how="outer").fillna(0.0)
+            out = ga.merge(gb, on=by, how="outer").fillna(0.0)
             out["Units_Diff"] = out["Units_A"] - out["Units_B"]
             out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
             out["Units_%"] = out["Units_Diff"] / out["Units_B"].replace(0, np.nan)
             out["Sales_%"] = out["Sales_Diff"] / out["Sales_B"].replace(0, np.nan)
 
-            # Totals row
             total = {
-                group_col: "TOTAL",
-                "Units_A": float(out["Units_A"].sum()),
-                "Sales_A": float(out["Sales_A"].sum()),
-                "Units_B": float(out["Units_B"].sum()),
-                "Sales_B": float(out["Sales_B"].sum()),
+                by: "TOTAL",
+                "Units_A": out["Units_A"].sum(),
+                "Sales_A": out["Sales_A"].sum(),
+                "Units_B": out["Units_B"].sum(),
+                "Sales_B": out["Sales_B"].sum(),
             }
             total["Units_Diff"] = total["Units_A"] - total["Units_B"]
             total["Sales_Diff"] = total["Sales_A"] - total["Sales_B"]
-            total["Units_%"] = (total["Units_Diff"] / total["Units_B"]) if total["Units_B"] else np.nan
-            total["Sales_%"] = (total["Sales_Diff"] / total["Sales_B"]) if total["Sales_B"] else np.nan
+            total["Units_%"] = total["Units_Diff"] / total["Units_B"] if total["Units_B"] else np.nan
+            total["Sales_%"] = total["Sales_Diff"] / total["Sales_B"] if total["Sales_B"] else np.nan
 
             out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
 
-            sort_by = st.selectbox(
-                "Sort by",
-                options=["Sales_Diff", "Units_Diff", "Sales_A", "Sales_B", "Units_A", "Units_B"],
-                index=0,
-                key="cmp_sort"
-            )
-            ascending = st.checkbox("Ascending", value=False, key="cmp_sort_asc")
-            out = out.sort_values(sort_by, ascending=ascending, kind="mergesort")
-
-            st.caption(f"Selection A: {', '.join(a_pick)}  |  Selection B: {', '.join(b_pick)}")
-
-            disp = out[[group_col, "Units_A", "Sales_A", "Units_B", "Sales_B", "Units_Diff", "Units_%", "Sales_Diff", "Sales_%"]].copy()
+            disp = out[[by,"Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]]
             sty = disp.style.format({
-                "Units_A": lambda v: fmt_int(v),
-                "Units_B": lambda v: fmt_int(v),
-                "Units_Diff": lambda v: fmt_int(v),
-                "Units_%": lambda v: f"{(v*100):.1f}%" if pd.notna(v) else "—",
-                "Sales_A": lambda v: fmt_currency(v),
-                "Sales_B": lambda v: fmt_currency(v),
-                "Sales_Diff": lambda v: fmt_currency(v),
-                "Sales_%": lambda v: f"{(v*100):.1f}%" if pd.notna(v) else "—",
-            }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff", "Sales_Diff"])
+                "Units_A": fmt_int,
+                "Units_B": fmt_int,
+                "Units_Diff": fmt_int,
+                "Units_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+                "Sales_A": fmt_currency,
+                "Sales_B": fmt_currency,
+                "Sales_Diff": fmt_currency,
+                "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+            }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
 
-            st.dataframe(sty, use_container_width=True, height=_table_height(disp, max_px=1400), hide_index=True)
-
+            st.caption(f"Year: {sel_year} | A: {', '.join(a_pick)} | B: {', '.join(b_pick)}")
+            st.dataframe(sty, use_container_width=True, hide_index=True)
 # -------------------------
 # Run-Rate Forecast
 # -------------------------
@@ -2029,10 +2022,45 @@ with tab_backup:
         st.info("No sales yet.")
 
 
+
 # -------------------------
 # Bulk Data Upload
 # -------------------------
 with tab_bulk_upload:
+    st.subheader("Bulk Data Upload (Multi-week / Multi-month)")
+
+    st.markdown(
+        """
+        Use this when you get a **wide** retailer file (not week-by-week uploads).
+
+        Expected format:
+        - One sheet per retailer (or retailer name in cell **A1**)
+        - Column **A** = SKU (starting row 2)
+        - Row **1** from column **B** onward = week ranges (example: `1-1 / 1-3`)
+        - Cells = Units sold for that SKU in that week
+        - Sales uses your **current pricing** (Vendor Map / Price History)
+        """
+    )
+
+    upload_year = st.selectbox(
+        "Year for this bulk upload",
+        options=list(range(2018, date.today().year + 1)),
+        index=list(range(2018, date.today().year + 1)).index(2025),
+        key="bulk_year"
+    )
+
+    bulk_upload = st.file_uploader(
+        "Upload bulk data workbook (.xlsx)",
+        type=["xlsx"],
+        key="bulk_up"
+    )
+
+    if st.button("Ingest Bulk Workbook", disabled=bulk_upload is None):
+        new_rows = read_yow_workbook(bulk_upload, year=upload_year)
+        append_sales_to_store(new_rows)
+        st.success(f"Bulk workbook ingested for {upload_year}.")
+        st.rerun()
+
     st.subheader("Bulk Data Upload (Multi-week / Multi-month)")
 
     st.markdown(
