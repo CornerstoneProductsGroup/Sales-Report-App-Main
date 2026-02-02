@@ -947,10 +947,20 @@ else:
 
 sales_store = load_sales_store()
 price_hist = load_price_history()
-df = enrich_sales(sales_store, vmap, price_hist)
+df_all = enrich_sales(sales_store, vmap, price_hist)
+
+# KPIs across top (always current calendar year)
+df_kpi = df_all.copy()
+df_kpi["StartDate"] = pd.to_datetime(df_kpi["StartDate"], errors="coerce")
+df_kpi = df_kpi[df_kpi["StartDate"].dt.year == int(this_year)].copy()
+
+# Apply view-year filter for all reporting tabs
+df = df_all.copy()
+df["StartDate"] = pd.to_datetime(df["StartDate"], errors="coerce")
+df = df[df["StartDate"].dt.year == int(view_year)].copy()
 
 # KPIs across top
-m_all = wow_mom_metrics(df)
+m_all = wow_mom_metrics(df_kpi)
 
 st.markdown("## 📊 Overview (All Retailers)")
 r1 = st.columns(3)
@@ -1551,20 +1561,11 @@ with tab_compare:
     if df.empty:
         st.info("No sales data yet.")
     else:
-        d = df.copy()
+        d = df_all.copy()
         d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
         d = d[d["StartDate"].notna()].copy()
 
-        # Year selector (prevents bulk uploads from affecting current views)
-        years = sorted(d["StartDate"].dt.year.unique().tolist())
-        sel_year = st.selectbox(
-            "Select year",
-            options=years,
-            index=years.index(2025) if 2025 in years else len(years) - 1,
-            key="cmp_year"
-        )
-
-        d = d[d["StartDate"].dt.year == sel_year].copy()
+        # Month options across ALL years (so you can compare Jan 2025 vs Jan 2026)
         d["MonthP"] = d["StartDate"].dt.to_period("M")
 
         months = sorted(d["MonthP"].unique().tolist())
