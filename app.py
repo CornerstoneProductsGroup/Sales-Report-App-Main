@@ -1007,7 +1007,6 @@ def make_totals_tables(base: pd.DataFrame, group_col: str, tf_weeks, avg_weeks):
         avg_use = [w for w in avg_use if pd.to_datetime(w, errors="coerce").date() != first_week]
 
     sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
-        avg_use = resolve_avg_use(avg_weeks, use, current_year)
     units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
 
     # Diff vs Avg uses the last week displayed minus Avg
@@ -1144,9 +1143,9 @@ with tab_unit_summary:
                 units_p["Diff"] = units_p[use[-1]] - units_p[use[-2]]
             else:
                 units_p["Diff"] = 0.0
-    avg_use = resolve_week_dates(use, avgw)
+            avg_use = resolve_week_dates(use, avgw)
             if first_week is not None and avg_use:
-    avg_use = [w for w in avg_use if w != first_week]
+                avg_use = [w for w in avg_use if w != first_week]
             units_p["Avg"] = units_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
             units_p["Diff vs Avg"] = units_p[use[-1]] - units_p["Avg"] if use else 0.0
 
@@ -1187,9 +1186,9 @@ with tab_unit_summary:
                 sales_p["Diff"] = sales_p[use[-1]] - sales_p[use[-2]]
             else:
                 sales_p["Diff"] = 0.0
-    avg_use = resolve_week_dates(use, avgw)
+            avg_use = resolve_week_dates(use, avgw)
             if first_week is not None and avg_use:
-    avg_use = [w for w in avg_use if w != first_week]
+                avg_use = [w for w in avg_use if w != first_week]
             sales_p["Avg"] = sales_p[avg_use].replace(0, np.nan).mean(axis=1) if avg_use else 0.0
             sales_p["Diff vs Avg"] = sales_p[use[-1]] - sales_p["Avg"] if use else 0.0
 
