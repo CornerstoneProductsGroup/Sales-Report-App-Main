@@ -1,5 +1,6 @@
 
-def avg_ignore_zeros_cols(row: pd.Series, cols: list[str]) -> float:
+import pandas as pd
+def avg_ignore_zeros_cols(row, cols):
     """
     Average of columns in row ignoring zeros/NaN, and ignoring the earliest week column.
     """
@@ -19,7 +20,7 @@ def avg_ignore_zeros_cols(row: pd.Series, cols: list[str]) -> float:
     return float(np.mean(vals)) if vals else 0.0
 
 
-def _week_cols_excluding_first(df: pd.DataFrame, week_cols: list[str]) -> list[str]:
+def _week_cols_excluding_first(df, week_cols):
     """
     Remove the earliest week column from week_cols (to ignore partial first week).
     Uses parsed week start date from the column name when possible.
