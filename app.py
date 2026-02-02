@@ -922,15 +922,6 @@ with st.sidebar:
         st.success("Ingested uploads into the sales store.")
         st.rerun()
 
-
-    st.subheader("YOW / Year Overview (Fast Upload)")
-    yow_upload = st.file_uploader("Upload YOW workbook (.xlsx)", type=["xlsx"], key="yow_up")
-    if st.button("Ingest YOW (uses current pricing)", disabled=yow_upload is None):
-        new_rows = read_yow_workbook(yow_upload, year=year)
-        append_sales_to_store(new_rows)
-        st.success("Ingested YOW workbook into the sales store.")
-        st.rerun()
-
     st.divider()
     if st.button("Clear ALL stored sales data"):
         if DEFAULT_SALES_STORE.exists():
@@ -1078,9 +1069,11 @@ tabs = st.tabs([
     "No Sales SKUs",
     "Edit Vendor Map",
     "Backup / Restore",
+    "Bulk Data Upload",
 ])
 (tab_retail_totals, tab_vendor_totals, tab_unit_summary, tab_exec, tab_wow_exc,
- tab_compare, tab_runrate, tab_no_sales, tab_edit_map, tab_backup) = tabs
+ tab_compare, tab_runrate, tab_no_sales, tab_edit_map, tab_backup, tab_bulk_upload) = tabs
+
 
 
 
@@ -2034,3 +2027,39 @@ with tab_backup:
                            file_name="enriched_sales.csv", mime="text/csv")
     else:
         st.info("No sales yet.")
+
+
+# -------------------------
+# Bulk Data Upload
+# -------------------------
+with tab_bulk_upload:
+    st.subheader("Bulk Data Upload (Multi-week / Multi-month)")
+
+    st.markdown(
+        """
+        Use this when you get a **wide** retailer file (not week-by-week uploads).
+
+        Expected format:
+        - One sheet per retailer (or retailer name in cell **A1**)
+        - Column **A** = SKU (starting row 2)
+        - Row **1** from column **B** onward = week ranges (example: `1-1 / 1-3`)
+        - Cells = Units sold for that SKU in that week
+        - Sales uses your **current pricing** (Vendor Map / Price History). `UnitPrice` is left blank.
+        """
+    )
+
+    bulk_upload = st.file_uploader(
+        "Upload bulk data workbook (.xlsx)",
+        type=["xlsx"],
+        key="bulk_up"
+    )
+
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        if st.button("Ingest Bulk Workbook", disabled=bulk_upload is None):
+            new_rows = read_yow_workbook(bulk_upload, year=year)
+            append_sales_to_store(new_rows)
+            st.success("Bulk workbook ingested successfully.")
+            st.rerun()
+    with c2:
+        st.caption("Tip: You can re-upload corrected files anytime. If you want an overwrite mode (replace existing weeks), tell me and I’ll add it.")
