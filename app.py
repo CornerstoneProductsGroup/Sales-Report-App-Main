@@ -1454,230 +1454,228 @@ def render_sku_health():
 
         if df_all.empty:
             st.info("No sales data yet.")
+            return
+
+        d = df_all.copy()
+        d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+        d = d[d["StartDate"].notna()].copy()
+        d["Year"] = d["StartDate"].dt.year.astype(int)
+        d["Month"] = d["StartDate"].dt.month.astype(int)
+
+        years = sorted(d["Year"].unique().tolist())
+        month_name = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+        month_list = [month_name[i] for i in range(1,13)]
+
+        c1, c2, c3 = st.columns([1, 1, 2])
+        with c1:
+            base_year = st.selectbox("Base year", options=years, index=max(0, len(years)-2), key="sh_base")
+        with c2:
+            comp_year = st.selectbox("Compare to", options=years, index=len(years)-1, key="sh_comp")
+        with c3:
+            basis = st.radio("Primary basis", options=["Sales", "Units"], index=0, horizontal=True, key="sh_basis")
+
+        pmode = st.selectbox("Period", options=["Full year", "Specific months"], index=0, key="sh_period_mode")
+        sel_months = list(range(1,13))
+        if pmode == "Specific months":
+            sel_names = st.multiselect("Months", options=month_list, default=[month_list[0]], key="sh_months_pick")
+            sel_months = [k for k,v in month_name.items() if v in sel_names]
+
+        f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
+        with f1:
+            vendor_filter = st.multiselect(
+                "Vendor filter (optional)",
+                options=sorted([x for x in d["Vendor"].dropna().unique().tolist() if str(x).strip()]),
+                key="sh_vendor_filter"
+            )
+        with f2:
+            retailer_filter = st.multiselect(
+                "Retailer filter (optional)",
+                options=sorted([x for x in d["Retailer"].dropna().unique().tolist() if str(x).strip()]),
+                key="sh_retailer_filter"
+            )
+        with f3:
+            top_n = st.number_input("Top N", min_value=20, max_value=2000, value=200, step=20, key="sh_topn")
+        with f4:
+            status_pick = st.multiselect(
+                "Status",
+                options=["🔥 Strong","📈 Growing","⚠ Watch","❌ At Risk"],
+                default=["🔥 Strong","📈 Growing","⚠ Watch","❌ At Risk"],
+                key="sh_status"
+            )
+
+        dd = d.copy()
+        if vendor_filter:
+            dd = dd[dd["Vendor"].isin(vendor_filter)]
+        if retailer_filter:
+            dd = dd[dd["Retailer"].isin(retailer_filter)]
+
+        a = dd[(dd["Year"] == int(base_year)) & (dd["Month"].isin(sel_months))].copy()
+        b = dd[(dd["Year"] == int(comp_year)) & (dd["Month"].isin(sel_months))].copy()
+
+        ga = a.groupby("SKU", as_index=False).agg(Sales_A=("Sales","sum"), Units_A=("Units","sum"))
+        gb = b.groupby("SKU", as_index=False).agg(Sales_B=("Sales","sum"), Units_B=("Units","sum"))
+        out = ga.merge(gb, on="SKU", how="outer").fillna(0.0)
+
+        cov = b.groupby("SKU", as_index=False).agg(Retailers=("Retailer","nunique"))
+        out = out.merge(cov, on="SKU", how="left").fillna({"Retailers": 0})
+
+        wk = b.groupby("SKU", as_index=False).agg(ActiveWeeks=("StartDate","nunique"))
+        out = out.merge(wk, on="SKU", how="left").fillna({"ActiveWeeks": 0})
+
+        # Score + status
+        out["Δ Sales"] = out["Sales_B"] - out["Sales_A"]
+        out["Δ Units"] = out["Units_B"] - out["Units_A"]
+        out["Sales %"] = out["Δ Sales"] / out["Sales_A"].replace(0, np.nan)
+        out["Units %"] = out["Δ Units"] / out["Units_A"].replace(0, np.nan)
+
+        if basis == "Sales":
+            out["Score"] = out["Δ Sales"]
         else:
-            d = df_all.copy()
-            d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
-            d = d[d["StartDate"].notna()].copy()
-            d["Year"] = d["StartDate"].dt.year.astype(int)
-            d["Month"] = d["StartDate"].dt.month.astype(int)
+            out["Score"] = out["Δ Units"]
 
-            years = sorted(d["Year"].unique().tolist())
-            c1, c2, c3 = st.columns([1, 1, 2])
-            with c1:
-                base_year = st.selectbox("Base year", options=years, index=max(0, len(years)-2), key="sh_base")
-            with c2:
-                comp_year = st.selectbox("Compare to", options=years, index=len(years)-1, key="sh_comp")
-            with c3:
-                basis = st.radio("Primary basis", options=["Sales", "Units"], index=0, horizontal=True, key="sh_basis")
-
-            f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
-            with f1:
-                vendor_filter = st.multiselect(
-                    "Vendor filter (optional)",
-                    options=sorted([x for x in d["Vendor"].dropna().unique().tolist() if str(x).strip()]),
-                    key="sh_vendor_filter"
-                )
-            with f2:
-                retailer_filter = st.multiselect(
-                    "Retailer filter (optional)",
-                    options=sorted([x for x in d["Retailer"].dropna().unique().tolist() if str(x).strip()]),
-                    key="sh_retailer_filter"
-                )
-            with f3:
-                top_n = st.number_input("Top N", min_value=20, max_value=2000, value=200, step=20, key="sh_topn")
-            with f4:
-                status_pick = st.multiselect(
-                    "Status",
-                    options=["🔥 Strong","📈 Growing","⚠ Watch","❌ At Risk"],
-                    default=["🔥 Strong","📈 Growing","⚠ Watch","❌ At Risk"],
-                    key="sh_status"
-                )
-
-            dd = d.copy()
-            if vendor_filter:
-                dd = dd[dd["Vendor"].isin(vendor_filter)]
-            if retailer_filter:
-                dd = dd[dd["Retailer"].isin(retailer_filter)]
-
-            a = dd[dd["Year"] == int(base_year)].copy()
-            b = dd[dd["Year"] == int(comp_year)].copy()
-
-            ga = a.groupby("SKU", as_index=False).agg(Sales_A=("Sales","sum"), Units_A=("Units","sum"))
-            gb = b.groupby("SKU", as_index=False).agg(Sales_B=("Sales","sum"), Units_B=("Units","sum"))
-            out = ga.merge(gb, on="SKU", how="outer").fillna(0.0)
-
-            cov = b.groupby("SKU", as_index=False).agg(Retailers=("Retailer","nunique"))
-            out = out.merge(cov, on="SKU", how="left").fillna({"Retailers": 0})
-
-            wk = b.groupby("SKU", as_index=False).agg(ActiveWeeks=("StartDate","nunique"))
-            out = out.merge(wk, on="SKU", how="left").fillna({"ActiveWeeks": 0})
-
-            value_col = "Sales" if basis == "Sales" else "Units"
-            tmp = b.groupby(["SKU","Retailer"], as_index=False).agg(val=(value_col,"sum"))
-            tot = tmp.groupby("SKU", as_index=False).agg(total=("val","sum"))
-            top = tmp.sort_values("val", ascending=False).groupby("SKU", as_index=False).first().rename(columns={"Retailer":"TopRetailer","val":"TopRetailerVal"})
-            conc = tot.merge(top, on="SKU", how="left")
-            conc["TopRetailerShare"] = conc["TopRetailerVal"] / conc["total"].replace(0, np.nan)
-            out = out.merge(conc[["SKU","TopRetailer","TopRetailerShare"]], on="SKU", how="left")
-
-            msum = b.groupby(["SKU","Month"], as_index=False).agg(v=(value_col,"sum"))
-
-            def _slope(df_):
-                x = df_["Month"].to_numpy(dtype=float)
-                y = df_["v"].to_numpy(dtype=float)
-                if len(x) < 2:
-                    return 0.0
-                x = x - x.mean()
-                denom = (x*x).sum()
-                if denom == 0:
-                    return 0.0
-                return float((x*y).sum() / denom)
-
-            slopes = msum.groupby("SKU").apply(_slope).reset_index(name="TrendSlope")
-            out = out.merge(slopes, on="SKU", how="left").fillna({"TrendSlope": 0.0})
-
-            try:
-                if isinstance(vmap, pd.DataFrame) and "SKU" in vmap.columns and "Vendor" in vmap.columns:
-                    out = out.merge(vmap[["SKU","Vendor"]].drop_duplicates(), on="SKU", how="left")
-            except Exception:
-                pass
-
-            out["A_val"] = out["Sales_A"] if basis == "Sales" else out["Units_A"]
-            out["B_val"] = out["Sales_B"] if basis == "Sales" else out["Units_B"]
-            out["YoY_Pct"] = (out["B_val"] - out["A_val"]) / out["A_val"].replace(0, np.nan)
-
-            def _clamp01(x):
-                return np.clip(x, 0.0, 1.0)
-
-            yoy_n = _clamp01((out["YoY_Pct"].fillna(0.0) + 0.5) / 1.0)
-            cov_n = _clamp01(out["Retailers"].astype(float) / 5.0)
-            trend_n = _clamp01((np.tanh(out["TrendSlope"].astype(float) / (out["B_val"].replace(0, np.nan).fillna(1.0))) + 1.0) / 2.0)
-            stab_n = _clamp01(out["ActiveWeeks"].astype(float) / 52.0)
-            div_n = _clamp01(1.0 - out["TopRetailerShare"].fillna(1.0).astype(float))
-
-            out["HealthScore"] = (100.0 * (0.30*yoy_n + 0.20*cov_n + 0.20*trend_n + 0.15*stab_n + 0.15*div_n)).round(0)
-
-            def _status(s):
-                if s >= 80:
-                    return "🔥 Strong"
-                if s >= 60:
-                    return "📈 Growing"
-                if s >= 40:
-                    return "⚠ Watch"
+        def _status(row):
+            a0 = float(row["Sales_A"] if basis=="Sales" else row["Units_A"])
+            b0 = float(row["Sales_B"] if basis=="Sales" else row["Units_B"])
+            delta = b0 - a0
+            if a0 == 0 and b0 > 0:
+                return "📈 Growing"
+            if a0 > 0 and b0 == 0:
                 return "❌ At Risk"
+            if delta > 0:
+                return "🔥 Strong"
+            if delta < 0:
+                return "⚠ Watch"
+            return "⚠ Watch"
 
-            out["Status"] = out["HealthScore"].apply(_status)
-            out = out[out["Status"].isin(status_pick)].copy()
-            out = out.sort_values(["HealthScore","B_val"], ascending=False, kind="mergesort").head(int(top_n))
+        out["Status"] = out.apply(_status, axis=1)
 
-            disp_cols = ["SKU"]
-            if "Vendor" in out.columns:
-                disp_cols.append("Vendor")
-            disp_cols += ["HealthScore","Status","Retailers","TopRetailer","TopRetailerShare","Sales_A","Sales_B","Units_A","Units_B","YoY_Pct"]
+        out = out[out["Status"].isin(status_pick)].copy()
+        out = out.sort_values("Score", ascending=False, kind="mergesort").head(int(top_n))
 
-            disp = make_unique_columns(out[disp_cols].copy())
+        # Vendor lookup
+        try:
+            if isinstance(vmap, pd.DataFrame) and "SKU" in vmap.columns and "Vendor" in vmap.columns:
+                out = out.merge(vmap[["SKU","Vendor"]].drop_duplicates(), on="SKU", how="left")
+        except Exception:
+            pass
 
-            sty = disp.style.format({
-                "HealthScore": lambda v: f"{int(v):,}",
+        cols = ["SKU"] + (["Vendor"] if "Vendor" in out.columns else []) + ["Status","Sales_A","Sales_B","Δ Sales","Sales %","Units_A","Units_B","Δ Units","Units %","Retailers","ActiveWeeks"]
+        disp = out[cols].copy()
+        disp = disp.rename(columns={
+            "Sales_A": str(base_year),
+            "Sales_B": str(comp_year),
+            "Units_A": f"Units {base_year}",
+            "Units_B": f"Units {comp_year}",
+        })
+        disp = make_unique_columns(disp)
+
+        st.dataframe(
+            disp.style.format({
+                str(base_year): fmt_currency,
+                str(comp_year): fmt_currency,
+                "Δ Sales": fmt_currency,
+                "Sales %": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+                f"Units {base_year}": fmt_int,
+                f"Units {comp_year}": fmt_int,
+                "Δ Units": fmt_int,
+                "Units %": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
                 "Retailers": fmt_int,
-                "TopRetailerShare": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-                "Sales_A": fmt_currency,
-                "Sales_B": fmt_currency,
-                "Units_A": fmt_int,
-                "Units_B": fmt_int,
-                "YoY_Pct": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-            })
-            st.dataframe(sty, use_container_width=True, hide_index=True)
-
-    # -------------------------
-    # Lost Sales
-    # -------------------------
-
+                "ActiveWeeks": fmt_int,
+            }),
+            use_container_width=True,
+            hide_index=True,
+            height=_table_height(disp, max_px=1100),
+        )
 
 def render_lost_sales():
         st.subheader("Lost Sales Detector")
 
         if df_all.empty:
             st.info("No sales data yet.")
-        else:
-            d = df_all.copy()
-            d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
-            d = d[d["StartDate"].notna()].copy()
-            d["Year"] = d["StartDate"].dt.year.astype(int)
+            return
 
-            years = sorted(d["Year"].unique().tolist())
-            c1, c2, c3 = st.columns([1, 1, 2])
-            with c1:
-                base_year = st.selectbox("Base year", options=years, index=max(0, len(years)-2), key="ls_base")
-            with c2:
-                comp_year = st.selectbox("Compare to", options=years, index=len(years)-1, key="ls_comp")
-            with c3:
-                basis = st.radio("Basis", options=["Sales", "Units"], index=0, horizontal=True, key="ls_basis")
+        d = df_all.copy()
+        d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+        d = d[d["StartDate"].notna()].copy()
+        d["Year"] = d["StartDate"].dt.year.astype(int)
+        d["Month"] = d["StartDate"].dt.month.astype(int)
 
-            value_col = "Sales" if basis == "Sales" else "Units"
+        years = sorted(d["Year"].unique().tolist())
+        month_name = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+        month_list = [month_name[i] for i in range(1,13)]
 
-            a = d[d["Year"] == int(base_year)].copy()
-            b = d[d["Year"] == int(comp_year)].copy()
+        c1, c2, c3 = st.columns([1, 1, 2])
+        with c1:
+            base_year = st.selectbox("Base year", options=years, index=max(0, len(years)-2), key="ls_base")
+        with c2:
+            comp_year = st.selectbox("Compare to", options=years, index=len(years)-1, key="ls_comp")
+        with c3:
+            basis = st.radio("Basis", options=["Sales", "Units"], index=0, horizontal=True, key="ls_basis")
 
-            ga = a.groupby("SKU", as_index=False).agg(A=(value_col,"sum"))
-            gb = b.groupby("SKU", as_index=False).agg(B=(value_col,"sum"))
-            sku = ga.merge(gb, on="SKU", how="outer").fillna(0.0)
-            sku["Delta"] = sku["B"] - sku["A"]
-            sku["Pct"] = sku["Delta"] / sku["A"].replace(0, np.nan)
+        pmode = st.selectbox("Period", options=["Full year", "Specific months"], index=0, key="ls_period_mode")
+        sel_months = list(range(1,13))
+        if pmode == "Specific months":
+            sel_names = st.multiselect("Months", options=month_list, default=[month_list[0]], key="ls_months_pick")
+            sel_months = [k for k,v in month_name.items() if v in sel_names]
 
-            lost = sku[(sku["A"] > 0) & (sku["B"] == 0)].copy().sort_values("A", ascending=False).head(200)
-            drops = sku[(sku["A"] > 0) & (sku["B"] > 0) & (sku["Delta"] < 0)].copy().sort_values("Delta").head(200)
+        value_col = "Sales" if basis == "Sales" else "Units"
 
-            ra = a.groupby(["SKU","Retailer"], as_index=False).agg(A=(value_col,"sum"))
-            rb = b.groupby(["SKU","Retailer"], as_index=False).agg(B=(value_col,"sum"))
-            rr = ra.merge(rb, on=["SKU","Retailer"], how="outer").fillna(0.0)
-            rr["Delta"] = rr["B"] - rr["A"]
-            lost_retail = rr[(rr["A"] > 0) & (rr["B"] == 0)].copy().sort_values("A", ascending=False).head(300)
+        a = d[(d["Year"] == int(base_year)) & (d["Month"].isin(sel_months))].copy()
+        b = d[(d["Year"] == int(comp_year)) & (d["Month"].isin(sel_months))].copy()
 
-            try:
-                if isinstance(vmap, pd.DataFrame) and "SKU" in vmap.columns and "Vendor" in vmap.columns:
-                    vend = vmap[["SKU","Vendor"]].drop_duplicates()
-                    lost = lost.merge(vend, on="SKU", how="left")
-                    drops = drops.merge(vend, on="SKU", how="left")
-                    lost_retail = lost_retail.merge(vend, on="SKU", how="left")
-            except Exception:
-                pass
+        ga = a.groupby("SKU", as_index=False).agg(A=(value_col,"sum"))
+        gb = b.groupby("SKU", as_index=False).agg(B=(value_col,"sum"))
+        sku = ga.merge(gb, on="SKU", how="outer").fillna(0.0)
+        sku["Delta"] = sku["B"] - sku["A"]
+        sku["Pct"] = sku["Delta"] / sku["A"].replace(0, np.nan)
 
-            def _fmt(v):
-                return fmt_currency(v) if value_col == "Sales" else fmt_int(v)
+        lost = sku[(sku["A"] > 0) & (sku["B"] == 0)].copy().sort_values("A", ascending=False).head(200)
+        drops = sku[(sku["A"] > 0) & (sku["B"] > 0) & (sku["Delta"] < 0)].copy().sort_values("Delta").head(200)
 
-            st.markdown("### Lost SKUs (sold in base year, zero in compare year)")
-            lost_disp = lost[["SKU"] + (["Vendor"] if "Vendor" in lost.columns else []) + ["A"]].copy().rename(columns={"A": str(base_year)})
-            lost_disp = make_unique_columns(lost_disp)
-            st.dataframe(lost_disp.style.format({str(base_year): _fmt}), use_container_width=True, hide_index=True, height=600)
+        ra = a.groupby(["SKU","Retailer"], as_index=False).agg(A=(value_col,"sum"))
+        rb = b.groupby(["SKU","Retailer"], as_index=False).agg(B=(value_col,"sum"))
+        rr = ra.merge(rb, on=["SKU","Retailer"], how="outer").fillna(0.0)
+        rr["Delta"] = rr["B"] - rr["A"]
+        lost_retail = rr[(rr["A"] > 0) & (rr["B"] == 0)].copy().sort_values("A", ascending=False).head(300)
 
-            st.markdown("### Biggest declines (still selling, but down)")
-            drops_disp = drops[["SKU"] + (["Vendor"] if "Vendor" in drops.columns else []) + ["A","B","Delta","Pct"]].copy()
-            drops_disp = drops_disp.rename(columns={"A": str(base_year), "B": str(comp_year)})
-            drops_disp = make_unique_columns(drops_disp)
-            st.dataframe(
-                drops_disp.style.format({
-                    str(base_year): _fmt,
-                    str(comp_year): _fmt,
-                    "Delta": _fmt,
-                    "Pct": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-                }),
-                use_container_width=True,
-                hide_index=True,
-                height=700
-            )
+        try:
+            if isinstance(vmap, pd.DataFrame) and "SKU" in vmap.columns and "Vendor" in vmap.columns:
+                vend = vmap[["SKU","Vendor"]].drop_duplicates()
+                lost = lost.merge(vend, on="SKU", how="left")
+                drops = drops.merge(vend, on="SKU", how="left")
+                lost_retail = lost_retail.merge(vend, on="SKU", how="left")
+        except Exception:
+            pass
 
-            st.markdown("### Lost retailers (SKU x Retailer disappeared)")
-            lr = lost_retail[["SKU","Retailer"] + (["Vendor"] if "Vendor" in lost_retail.columns else []) + ["A"]].copy()
-            lr = lr.rename(columns={"A": str(base_year)})
-            lr = make_unique_columns(lr)
-            st.dataframe(lr.style.format({str(base_year): _fmt}), use_container_width=True, hide_index=True, height=700)
+        def _fmt(v):
+            return fmt_currency(v) if value_col == "Sales" else fmt_int(v)
 
+        st.markdown("### Lost SKUs (sold in base period, zero in compare period)")
+        lost_disp = lost[["SKU"] + (["Vendor"] if "Vendor" in lost.columns else []) + ["A"]].copy().rename(columns={"A": str(base_year)})
+        lost_disp = make_unique_columns(lost_disp)
+        st.dataframe(lost_disp.style.format({str(base_year): _fmt}), use_container_width=True, hide_index=True, height=650)
 
-    # -------------------------
-    # Seasonality
-    # -------------------------
+        st.markdown("### Biggest declines (still selling, but down)")
+        drops_disp = drops[["SKU"] + (["Vendor"] if "Vendor" in drops.columns else []) + ["A","B","Delta","Pct"]].copy()
+        drops_disp = drops_disp.rename(columns={"A": str(base_year), "B": str(comp_year)})
+        drops_disp = make_unique_columns(drops_disp)
+        st.dataframe(
+            drops_disp.style.format({
+                str(base_year): _fmt,
+                str(comp_year): _fmt,
+                "Delta": _fmt,
+                "Pct": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+            }),
+            use_container_width=True,
+            hide_index=True,
+            height=650
+        )
 
+        st.markdown("### Lost retailers for specific SKUs")
+        lost_retail_disp = lost_retail[["SKU","Retailer"] + (["Vendor"] if "Vendor" in lost_retail.columns else []) + ["A"]].copy()
+        lost_retail_disp = lost_retail_disp.rename(columns={"A": str(base_year)})
+        lost_retail_disp = make_unique_columns(lost_retail_disp)
+        st.dataframe(lost_retail_disp.style.format({str(base_year): _fmt}), use_container_width=True, hide_index=True, height=700)
 
 def render_data_inventory():
         st.subheader("Data Inventory")
@@ -2002,47 +2000,60 @@ def render_seasonality():
             d = d[d["StartDate"].notna()].copy()
             d["Year"] = d["StartDate"].dt.year.astype(int)
             d["Month"] = d["StartDate"].dt.month.astype(int)
+            d["MonthP"] = d["StartDate"].dt.to_period("M")
+
+            month_name = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
+            month_list = [month_name[i] for i in range(1,13)]
+
+            years = sorted(d["Year"].unique().tolist())
 
             c1, c2, c3 = st.columns([1, 2, 2])
             with c1:
                 basis = st.radio("Basis", options=["Units", "Sales"], index=0, horizontal=True, key="sea_basis")
             with c2:
-                years = sorted(d["Year"].unique().tolist())
-                year_opt = ["All years"] + [str(y) for y in years]
-                pick_year = st.selectbox("Year", options=year_opt, index=0, key="sea_year")
+                mode = st.selectbox("Timeframe", options=["Pick year", "Lookback"], index=0, key="sea_tf_mode")
             with c3:
-                month_mode = st.radio("Months", options=["All months (Jan–Dec)", "Custom months"], index=0, horizontal=True, key="sea_month_mode")
+                # pick year or lookback window
+                if mode == "Pick year":
+                    pick_year = st.selectbox("Year", options=["All years"] + [str(y) for y in years], index=0, key="sea_year")
+                    month_mode = st.radio("Months", options=["All months (Jan–Dec)", "Custom months"], index=0, horizontal=True, key="sea_month_mode")
+                    if month_mode == "Custom months":
+                        sel_month_names = st.multiselect("Select months", options=month_list, default=month_list, key="sea_months_pick")
+                        sel_months = [k for k,v in month_name.items() if v in sel_month_names]
+                    else:
+                        sel_months = list(range(1,13))
+                    # Apply filters
+                    d2 = d[d["Month"].isin(sel_months)].copy()
+                    if pick_year != "All years":
+                        d2 = d2[d2["Year"] == int(pick_year)].copy()
+                else:
+                    lookback = st.selectbox("Look back", options=["12 months","24 months","36 months","All available"], index=0, key="sea_lookback")
+                    if lookback == "All available":
+                        d2 = d.copy()
+                    else:
+                        n = int(lookback.split()[0])
+                        months = sorted(d["MonthP"].dropna().unique().tolist())
+                        usem = months[-n:] if len(months) >= n else months
+                        d2 = d[d["MonthP"].isin(usem)].copy()
 
             min_units = st.number_input(
-                "Minimum total units (within the selected year/months) to include a SKU",
+                "Minimum total units (within selected timeframe) to include a SKU",
                 min_value=0, max_value=1_000_000, value=20, step=5, key="sea_min_units"
             )
 
-            month_name = {1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",7:"Jul",8:"Aug",9:"Sep",10:"Oct",11:"Nov",12:"Dec"}
-            month_list = [month_name[i] for i in range(1,13)]
-            if month_mode == "Custom months":
-                sel_month_names = st.multiselect("Select months", options=month_list, default=month_list, key="sea_months_pick")
-                sel_months = [k for k,v in month_name.items() if v in sel_month_names]
-            else:
-                sel_months = list(range(1,13))
-
-            # Apply year/month filters for seasonality calc
-            d2 = d[d["Month"].isin(sel_months)].copy()
-            if pick_year != "All years":
-                d2 = d2[d2["Year"] == int(pick_year)].copy()
-
             value_col = "Units" if basis == "Units" else "Sales"
 
-            # Monthly totals per SKU
-            m = d2.groupby(["SKU","Month"], as_index=False).agg(v=(value_col,"sum"))
+            # Monthly totals per SKU (within timeframe)
+            m = d2.groupby(["SKU","MonthP"], as_index=False).agg(v=(value_col,"sum"))
 
-            # Seasonality score: max_month_share (higher = more seasonal)
-            tot = m.groupby("SKU", as_index=False).agg(total=("v","sum"))
-            mx = m.sort_values("v", ascending=False).groupby("SKU", as_index=False).first().rename(columns={"Month":"PeakMonth","v":"PeakVal"})
+            # Seasonality score computed on month-of-year buckets (Jan..Dec) from the same timeframe
+            m_y = d2.groupby(["SKU","Month"], as_index=False).agg(v=(value_col,"sum"))
+            tot = m_y.groupby("SKU", as_index=False).agg(total=("v","sum"))
+            mx = m_y.sort_values("v", ascending=False).groupby("SKU", as_index=False).first().rename(columns={"Month":"PeakMonth","v":"PeakVal"})
             s = tot.merge(mx, on="SKU", how="left")
             s["SeasonalityScore"] = s["PeakVal"] / s["total"].replace(0, np.nan)
 
-            # Filter by total UNITS sold (within selected year/months), regardless of basis
+            # Filter by units sold in the timeframe (always units)
             units_tot = d2.groupby("SKU", as_index=False).agg(TotalUnits=("Units","sum"))
             s = s.merge(units_tot, on="SKU", how="left").fillna({"TotalUnits": 0})
             s = s[s["TotalUnits"] >= float(min_units)].copy()
@@ -2069,7 +2080,6 @@ def render_seasonality():
                 "SeasonalityScore": "Seasonality",
                 "TotalUnits": "Total Units",
             })
-            # Ensure no duplicate columns (prevents Streamlit arrow errors)
             tbl = tbl.loc[:, ~tbl.columns.duplicated()].copy()
 
             st.dataframe(
@@ -2082,17 +2092,16 @@ def render_seasonality():
             )
 
             st.divider()
-            st.markdown("### Seasonal profiles")
+            st.markdown("### Seasonal profiles (monthly totals in timeframe)")
 
-            # Average per year per month (within the selected filters)
-            m2 = d2.groupby(["SKU","Month"], as_index=False).agg(
-                v=(value_col,"sum"),
-                yrs=("Year","nunique")
-            )
-            m2["AvgPerYear"] = m2["v"] / m2["yrs"].replace(0, np.nan)
+            # Create a complete month index for charting, preserving chronological order
+            months_all = sorted(d2["MonthP"].dropna().unique().tolist())
+            if not months_all:
+                st.info("No months found in the selected timeframe.")
+                return
 
+            dt_index = pd.PeriodIndex(months_all, freq="M").to_timestamp()
 
-            # Interactive chart: keep months in Jan→Dec order using a datetime index
             for _, row in top.iterrows():
                 sku0 = row["SKU"]
                 vend0 = row.get("Vendor", "")
@@ -2107,19 +2116,12 @@ def render_seasonality():
 
                 st.markdown(f"**{title}**")
 
-                prof = m2[m2["SKU"] == sku0][["Month","AvgPerYear"]].copy()
-                prof = prof.set_index("Month").reindex(range(1,13)).fillna(0.0)
+                prof = m[m["SKU"] == sku0][["MonthP","v"]].copy()
+                prof["MonthP"] = prof["MonthP"].astype("period[M]")
+                prof = prof.set_index("MonthP").reindex(months_all).fillna(0.0)
 
-                # Map 1..12 -> a fixed year monthly datetime index to preserve order
-                dt_index = pd.date_range("2020-01-01", periods=12, freq="MS")
-                y = prof["AvgPerYear"].to_numpy()
-                chart_df = pd.DataFrame({"AvgPerYear": y}, index=dt_index)
+                chart_df = pd.DataFrame({f"{basis}": prof["v"].to_numpy()}, index=dt_index)
                 st.line_chart(chart_df)
-
-    # -------------------------
-    # Year Summary
-    # -------------------------
-
 
 def render_runrate():
         st.subheader("Run-Rate Forecast")
@@ -2533,18 +2535,78 @@ with tab_totals_dash:
                     tabS, tabU = st.tabs(["Sales", "Units"])
 
                     with tabS:
+                        _df = sales_t.copy()
+
+                        def _diff_color(v):
+                            try:
+                                v = float(v)
+                            except Exception:
+                                return ""
+                            if v > 0:
+                                return "color: #2ecc71; font-weight:600;"
+                            if v < 0:
+                                return "color: #e74c3c; font-weight:600;"
+                            return "color: #999999;"
+
+                        diff_cols = [c for c in _df.columns if c in ["Diff", "Diff vs Avg"]]
+                        sty = _df.style.format({c: fmt_currency for c in _df.columns if c != group_by})
+                        if diff_cols:
+                            sty = sty.applymap(lambda v: _diff_color(v), subset=diff_cols)
+
+                        # Bold TOTAL row (if present)
+                        try:
+                            if group_by in _df.columns:
+                                total_mask = _df[group_by].astype(str).str.upper().eq("TOTAL")
+                                if total_mask.any():
+                                    def _bold_total(row):
+                                        return ["font-weight:700;" if str(row.get(group_by,"")).upper()=="TOTAL" else "" for _ in row]
+                                    sty = sty.apply(_bold_total, axis=1)
+                        except Exception:
+                            pass
+
+                        _max_px = 1600 if group_by == "SKU" else 1200
                         st.dataframe(
-                            sales_t.style.format({c: fmt_currency for c in sales_t.columns if c != group_by}),
+                            sty,
                             use_container_width=True,
                             hide_index=True,
-                            height=_table_height(sales_t, max_px=800),
+                            height=_table_height(_df, max_px=_max_px),
                         )
                     with tabU:
+                        _df = units_t.copy()
+
+                        def _diff_color(v):
+                            try:
+                                v = float(v)
+                            except Exception:
+                                return ""
+                            if v > 0:
+                                return "color: #2ecc71; font-weight:600;"
+                            if v < 0:
+                                return "color: #e74c3c; font-weight:600;"
+                            return "color: #999999;"
+
+                        diff_cols = [c for c in _df.columns if c in ["Diff", "Diff vs Avg"]]
+                        sty = _df.style.format({c: fmt_int for c in _df.columns if c != group_by})
+                        if diff_cols:
+                            sty = sty.applymap(lambda v: _diff_color(v), subset=diff_cols)
+
+                        # Bold TOTAL row (if present)
+                        try:
+                            if group_by in _df.columns:
+                                total_mask = _df[group_by].astype(str).str.upper().eq("TOTAL")
+                                if total_mask.any():
+                                    def _bold_total(row):
+                                        return ["font-weight:700;" if str(row.get(group_by,"")).upper()=="TOTAL" else "" for _ in row]
+                                    sty = sty.apply(_bold_total, axis=1)
+                        except Exception:
+                            pass
+
+                        _max_px = 1600 if group_by == "SKU" else 1200
                         st.dataframe(
-                            units_t.style.format({c: fmt_int for c in units_t.columns if c != group_by}),
+                            sty,
                             use_container_width=True,
                             hide_index=True,
-                            height=_table_height(units_t, max_px=800),
+                            height=_table_height(_df, max_px=_max_px),
                         )
             else:
                 key = group_by
@@ -3076,26 +3138,28 @@ with tab_exec:
 
     d = add_week_col(d)
 
-    tf_label = st.selectbox(
-        "Timeframe",
-        options=["2 weeks","4 weeks","6 weeks","8 weeks","3 months","6 months","12 months","YTD (all loaded)"],
-        index=1,
-        key="ex_tf2"
-    )
 
-    # Apply timeframe
-    if "weeks" in tf_label:
-        n = int(tf_label.split()[0])
-        use = last_n_weeks(d, n)
-        d = d[d["Week"].isin(use)].copy()
-    elif "months" in tf_label:
-        n = int(tf_label.split()[0])
-        d["MonthP"] = pd.to_datetime(d["StartDate"], errors="coerce").dt.to_period("M")
-        months = sorted(d["MonthP"].dropna().unique().tolist())
-        usem = months[-n:] if len(months) >= n else months
-        d = d[d["MonthP"].isin(usem)].copy()
-    else:
-        pass
+    # Pick a year to display totals for (whole-year view)
+
+
+    d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+
+
+    d = d[d["StartDate"].notna()].copy()
+
+
+    d["Year"] = d["StartDate"].dt.year.astype(int)
+
+
+
+    years = sorted(d["Year"].unique().tolist())
+
+
+    pick_year = st.selectbox("Year", options=years, index=(len(years)-1 if years else 0), key="ex_year_pick")
+
+
+
+    d = d[d["Year"] == int(pick_year)].copy()
 
     m = wow_mom_metrics(d)
     cols = st.columns(6)
