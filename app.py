@@ -2489,39 +2489,79 @@ with tab_totals_dash:
         if d2.empty:
             st.info("No rows match your filters.")
         else:
-            key = group_by
-            agg = d2.groupby(key, as_index=False).agg(
-                Units=("Units","sum"),
-                Sales=("Sales","sum"),
-                SKUs=("SKU","nunique"),
-            )
-            if group_by != "SKU":
-                agg["Retailers"] = d2.groupby(key)["Retailer"].nunique().values if group_by == "Vendor" else ""
-                # For Vendor grouping, "Retailers" is meaningful; for Retailer grouping, leave blank
+            w1, w2, w3 = st.columns([2, 1, 1])
+            with w1:
+                tf_opt = st.selectbox(
+                    "Weeks shown",
+                    options=["8 weeks", "13 weeks", "26 weeks", "52 weeks", "3 months", "6 months", "12 months", "All available"],
+                    index=1,
+                    key="td_tf_weeks"
+                )
+            with w2:
+                avg_opt = st.selectbox(
+                    "Average window",
+                    options=["4 weeks", "8 weeks", "12 weeks"] + month_list,
+                    index=1,
+                    key="td_avg_weeks"
+                )
+            with w3:
+                view_mode = st.selectbox("View", options=["Weekly (with Diff/Avg)", "Summary totals"], index=0, key="td_view_mode")
 
-            sort_by = st.selectbox("Rank by", options=["Sales","Units"], index=0, key="td_rank_by")
-            agg = agg.sort_values(sort_by, ascending=False, kind="mergesort")
+            def _tf_map(x):
+                if x == "All available":
+                    return "all"
+                if "month" in x:
+                    return x
+                try:
+                    return int(x.split()[0])
+                except Exception:
+                    return 13
 
-            # Display
-            show_cols = [key, "Units", "Sales", "SKUs"]
-            if group_by == "Vendor":
-                show_cols.insert(1, "Retailers")
-            disp = agg[show_cols].copy()
-            disp = make_unique_columns(disp)
+            tf_weeks = _tf_map(tf_opt)
 
-            st.dataframe(
-                disp.style.format({
-                    "Units": fmt_int,
-                    "Sales": fmt_currency,
-                    "SKUs": fmt_int,
-                    "Retailers": fmt_int,
-                }),
-                use_container_width=True,
-                hide_index=True,
-                height=700
-            )
+            if view_mode.startswith("Weekly"):
+                sales_t, units_t = make_totals_tables(d2, group_by, tf_weeks, avg_opt)
+                # Keep alphabetical order for readability
+                if not sales_t.empty and group_by in sales_t.columns:
+                    sales_t = sales_t.sort_values(group_by, ascending=True, kind='mergesort')
+                if not units_t.empty and group_by in units_t.columns:
+                    units_t = units_t.sort_values(group_by, ascending=True, kind='mergesort')
 
-            st.caption("Tip: if you want the more detailed weekly breakdown views, use the dedicated Retailer Totals / Vendor Totals / Unit Summary tabs.")
+                if sales_t.empty and units_t.empty:
+                    st.info("No weekly totals available for the selected filters.")
+                else:
+                    tabS, tabU = st.tabs(["Sales", "Units"])
+
+                    with tabS:
+                        st.dataframe(
+                            sales_t.style.format({c: fmt_currency for c in sales_t.columns if c != group_by}),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=_table_height(sales_t, max_px=800),
+                        )
+                    with tabU:
+                        st.dataframe(
+                            units_t.style.format({c: fmt_int for c in units_t.columns if c != group_by}),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=_table_height(units_t, max_px=800),
+                        )
+            else:
+                key = group_by
+                agg = d2.groupby(key, as_index=False).agg(
+                    Units=("Units","sum"),
+                    Sales=("Sales","sum"),
+                    SKUs=("SKU","nunique"),
+                )                # Alphabetical order
+                agg = agg.sort_values(key, ascending=True, kind="mergesort")
+                disp = make_unique_columns(agg)
+
+                st.dataframe(
+                    disp.style.format({"Units": fmt_int, "Sales": fmt_currency, "SKUs": fmt_int}),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=700
+                )
 
 
 
