@@ -361,6 +361,29 @@ def save_price_history(ph: pd.DataFrame) -> None:
 
 
 
+
+
+# -------------------------
+# Caching helpers (performance)
+# -------------------------
+def _file_mtime(p: Path) -> float:
+    try:
+        return float(p.stat().st_mtime)
+    except Exception:
+        return 0.0
+
+@st.cache_data(show_spinner=False)
+def cached_vendor_map(path_str: str, mtime: float) -> pd.DataFrame:
+    # mtime is included to invalidate cache when the file changes
+    return load_vendor_map(Path(path_str))
+
+@st.cache_data(show_spinner=False)
+def cached_sales_store(mtime: float) -> pd.DataFrame:
+    return load_sales_store()
+
+@st.cache_data(show_spinner=False)
+def cached_price_history(mtime: float) -> pd.DataFrame:
+    return load_price_history()
 def _prepare_price_history_upload(new_rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Normalize a price history upload. Returns:
@@ -746,7 +769,7 @@ def read_weekly_workbook(uploaded_file, year: int) -> pd.DataFrame:
     except Exception:
         wb = None
 
-    rows = []
+    dfs = []
     for sh in xls.sheet_names:
         retailer = _normalize_retailer(sh)
 
@@ -795,18 +818,15 @@ def read_weekly_workbook(uploaded_file, year: int) -> pd.DataFrame:
 
         raw = raw[raw["SKU"].astype(str).str.strip().ne("")]
 
-        for _, r in raw.iterrows():
-            rows.append({
-                "Retailer": retailer,
-                "SKU": r["SKU"],
-                "Units": float(r["Units"]),
-                "UnitPrice": float(r["UnitPrice"]) if pd.notna(r.get("UnitPrice", np.nan)) else np.nan,
-                "StartDate": pd.to_datetime(sdt),
-                "EndDate": pd.to_datetime(edt),
-                "SourceFile": fname,
-            })
+        raw["Retailer"] = retailer
+        raw["StartDate"] = pd.to_datetime(sdt)
+        raw["EndDate"] = pd.to_datetime(edt)
+        raw["SourceFile"] = fname
+        if "UnitPrice" not in raw.columns:
+            raw["UnitPrice"] = np.nan
+        dfs.append(raw[["Retailer","SKU","Units","UnitPrice","StartDate","EndDate","SourceFile"]])
 
-    out = pd.DataFrame(rows)
+    out = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame(columns=["Retailer","SKU","Units","UnitPrice","StartDate","EndDate","SourceFile"])
     if not out.empty:
         out["Retailer"] = out["Retailer"].map(_normalize_retailer)
         out["SKU"] = out["SKU"].map(_normalize_sku)
@@ -984,6 +1004,21 @@ def enrich_sales(sales: pd.DataFrame, vmap: pd.DataFrame, price_hist: pd.DataFra
     out["Sales"] = (out["Units"] * out["PriceEffective"]).fillna(0.0)
     return out
 
+
+
+@st.cache_data(show_spinner=False)
+def cached_enrich_sales(store_mtime: float, vmap_path: str, vmap_mtime: float, ph_mtime: float) -> pd.DataFrame:
+    """
+    Cache the expensive enrichment step (merges + effective-dated pricing).
+    Cache is invalidated automatically when:
+      - sales_store.csv changes (store_mtime)
+      - vendor_map.xlsx changes (vmap_mtime)
+      - price_history.csv changes (ph_mtime)
+    """
+    sales_store = load_sales_store()
+    vmap = load_vendor_map(Path(vmap_path))
+    price_hist = load_price_history()
+    return enrich_sales(sales_store, vmap, price_hist)
 def wow_mom_metrics(df: pd.DataFrame) -> dict:
     out = {"total_units":0.0,"total_sales":0.0,"wow_units":None,"wow_sales":None,"mom_units":None,"mom_sales":None}
     if df is None or df.empty:
@@ -1062,10 +1097,25 @@ with st.sidebar:
     st.subheader("Weekly Sales Workbooks")
     wk_uploads = st.file_uploader("Upload weekly sales workbook(s) (.xlsx)", type=["xlsx"], accept_multiple_files=True, key="wk_up")
     if st.button("Ingest uploads", disabled=not wk_uploads):
-        for f in wk_uploads:
-            new_rows = read_weekly_workbook(f, year=year)
-            append_sales_to_store(new_rows)
-        st.success("Ingested uploads into the sales store.")
+        all_new = []
+        prog = st.progress(0, text="Reading workbooks…")
+        total = len(wk_uploads)
+        for i, f in enumerate(wk_uploads, start=1):
+            try:
+                new_rows = read_weekly_workbook(f, year=year)
+                if new_rows is not None and not new_rows.empty:
+                    all_new.append(new_rows)
+            except Exception as e:
+                st.error(f"Failed to read {getattr(f, 'name', 'upload')}: {e}")
+            prog.progress(i / max(total, 1), text=f"Reading workbooks… ({i}/{total})")
+        prog.empty()
+
+        if all_new:
+            combined_new = pd.concat(all_new, ignore_index=True)
+            append_sales_to_store(combined_new)
+            st.success(f"Ingested {len(all_new)} workbook(s) into the sales store.")
+        else:
+            st.info("No rows found in the uploaded workbooks.")
         st.rerun()
 
     st.divider()
@@ -1094,16 +1144,18 @@ except Exception:
 if vm_upload is not None:
     tmp = DATA_DIR / "_session_vendor_map.xlsx"
     tmp.write_bytes(vm_upload.getbuffer())
-    vmap = load_vendor_map(tmp)
+    vmap_path_used = str(tmp)
+    vmap = cached_vendor_map(vmap_path_used, _file_mtime(tmp))
 elif DEFAULT_VENDOR_MAP.exists():
-    vmap = load_vendor_map(DEFAULT_VENDOR_MAP)
+    vmap_path_used = str(DEFAULT_VENDOR_MAP)
+    vmap = cached_vendor_map(vmap_path_used, _file_mtime(DEFAULT_VENDOR_MAP))
 else:
     st.info("Upload a vendor map to begin.")
     st.stop()
 
-sales_store = load_sales_store()
-price_hist = load_price_history()
-df_all = enrich_sales(sales_store, vmap, price_hist)
+sales_store = cached_sales_store(_file_mtime(DEFAULT_SALES_STORE))
+price_hist = cached_price_history(_file_mtime(DEFAULT_PRICE_HISTORY))
+df_all = cached_enrich_sales(_file_mtime(DEFAULT_SALES_STORE), vmap_path_used, _file_mtime(Path(vmap_path_used)), _file_mtime(DEFAULT_PRICE_HISTORY))
 
 # KPIs across top (always current calendar year)
 df_kpi = df_all.copy()
