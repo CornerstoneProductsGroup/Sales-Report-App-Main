@@ -3807,7 +3807,7 @@ with tab_year_summary:
             conc.style.format({c: (lambda v: f"{v*100:.1f}%") for c in conc.columns if c != "Year"}),
             use_container_width=True,
             hide_index=True
-        
+        )
         st.caption("Breakdown shows which retailers/vendors make up the Top 1 / Top 3 / Top 5 shares for each year.")
 
         def _top_list(df_year, group_col, topn):
