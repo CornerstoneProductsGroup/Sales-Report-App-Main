@@ -64,13 +64,11 @@ def resolve_avg_use(avg_window, use_cols, current_year):
     """
     if not use_cols:
         return []
-
     # Month+Year like 'January 2026'
     if isinstance(avg_window, str):
-        mm = re.match(r"^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$",
-                      avg_window.strip())
-        if mm:
-            mon, yy = mm.group(1), int(mm.group(2))
+        m = re.match(r"^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$", avg_window.strip())
+        if m:
+            mon, yy = m.group(1), int(m.group(2))
             mnum = MONTH_NAME_TO_NUM.get(mon)
             dates = pd.to_datetime(pd.Series(list(use_cols)), errors="coerce")
             mask = (dates.dt.year == int(yy)) & (dates.dt.month == int(mnum))
@@ -83,7 +81,7 @@ def resolve_avg_use(avg_window, use_cols, current_year):
         mask = (dates.dt.year == int(current_year)) & (dates.dt.month == int(mnum))
         return [c for c, ok in zip(use_cols, mask.fillna(False).tolist()) if ok]
 
-    # Rolling weeks like '8 weeks'
+    # rolling weeks like '8 weeks'
     if isinstance(avg_window, str) and "week" in avg_window:
         try:
             n = int(avg_window.split()[0])
@@ -92,7 +90,21 @@ def resolve_avg_use(avg_window, use_cols, current_year):
         return use_cols[-n:] if len(use_cols) >= n else use_cols
 
     return use_cols
+[-n:] if len(use_cols) >= n else use_cols
+    return use_cols
 
+
+APP_TITLE = "Sales Dashboard (Vendor Map + Weekly Sheets)"
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(exist_ok=True)
+
+DEFAULT_VENDOR_MAP = DATA_DIR / "vendor_map.xlsx"
+DEFAULT_SALES_STORE = DATA_DIR / "sales_store.csv"
+DEFAULT_PRICE_HISTORY = DATA_DIR / "price_history.csv"
+
+
+# Year locks (prevent accidental edits to closed years)
+DEFAULT_YEAR_LOCKS = DATA_DIR / "year_locks.json"
 
 def load_year_locks() -> set[int]:
     try:
@@ -3820,81 +3832,44 @@ with tab_year_summary:
             g = g.rename(columns={"val": value_col})
             return g[[group_col, value_col, "Share"]]
 
-        
-        st.caption("Click a year to expand the Top 1 / Top 3 / Top 5 breakdown. Click again to collapse.")
+        with st.expander("Show Top Retailers/Vendors breakdown by year", expanded=False):
+            ypick = st.selectbox("Year for breakdown", options=years, index=len(years)-1, key="ys_conc_breakdown_year")
+            dy = d[d["Year"] == int(ypick)].copy()
 
-        def _top_list(df_year, group_col, topn):
-            g = df_year.groupby(group_col, as_index=False).agg(val=(value_col, "sum"))
-            total = float(g["val"].sum())
-            if total <= 0:
-                return pd.DataFrame(columns=[group_col, value_col, "Share"])
-            g = g.sort_values("val", ascending=False).head(topn).copy()
-            g["Share"] = g["val"] / total
-            g = g.rename(columns={"val": value_col})
-            return g[[group_col, value_col, "Share"]]
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Retailers**")
+                t1 = _top_list(dy, "Retailer", 1)
+                t3 = _top_list(dy, "Retailer", 3)
+                t5 = _top_list(dy, "Retailer", 5)
 
-        # Accordion: one expander per year
-        for y in years:
-            dy = d[d["Year"] == int(y)].copy()
-            with st.expander(f"{int(y)} — Top 1 / Top 3 / Top 5 breakdown", expanded=False):
-                c1, c2 = st.columns(2)
+                st.markdown("Top 1 Retailer")
+                st.dataframe(t1.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
+                             use_container_width=True, hide_index=True)
+                st.markdown("Top 3 Retailers")
+                st.dataframe(t3.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
+                             use_container_width=True, hide_index=True)
+                st.markdown("Top 5 Retailers")
+                st.dataframe(t5.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
+                             use_container_width=True, hide_index=True)
 
-                with c1:
-                    st.markdown("**Retailers**")
-                    t1 = _top_list(dy, "Retailer", 1)
-                    t3 = _top_list(dy, "Retailer", 3)
-                    t5 = _top_list(dy, "Retailer", 5)
+            with c2:
+                st.markdown("**Vendors**")
+                v1 = _top_list(dy, "Vendor", 1)
+                v3 = _top_list(dy, "Vendor", 3)
+                v5 = _top_list(dy, "Vendor", 5)
 
-                    st.markdown("Top 1 Retailer")
-                    st.dataframe(
-                        t1.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 3 Retailers")
-                    st.dataframe(
-                        t3.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 5 Retailers")
-                    st.dataframe(
-                        t5.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                st.markdown("Top 1 Vendor")
+                st.dataframe(v1.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
+                             use_container_width=True, hide_index=True)
+                st.markdown("Top 3 Vendors")
+                st.dataframe(v3.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
+                             use_container_width=True, hide_index=True)
+                st.markdown("Top 5 Vendors")
+                st.dataframe(v5.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
+                             use_container_width=True, hide_index=True)
 
-                with c2:
-                    st.markdown("**Vendors**")
-                    v1 = _top_list(dy, "Vendor", 1)
-                    v3 = _top_list(dy, "Vendor", 3)
-                    v5 = _top_list(dy, "Vendor", 5)
-
-                    st.markdown("Top 1 Vendor")
-                    st.dataframe(
-                        v1.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 3 Vendors")
-                    st.dataframe(
-                        v3.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 5 Vendors")
-                    st.dataframe(
-                        v5.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-with st.expander("Show Top Retailers/Vendors for every year (compact list)", expanded=False):
+        with st.expander("Show Top Retailers/Vendors for every year (compact list)", expanded=False):
             for y in years:
                 dy = d[d["Year"] == int(y)].copy()
                 r3 = _top_list(dy, "Retailer", 3)
