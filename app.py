@@ -3902,8 +3902,8 @@ with st.expander("Show Top Retailers/Vendors for every year (compact list)", exp
                 # compact strings
                 r_str = ", ".join([f"{row['Retailer']} ({row['Share']*100:.1f}%)" for _, row in r3.iterrows()]) if not r3.empty else "—"
                 v_str = ", ".join([f"{row['Vendor']} ({row['Share']*100:.1f}%)" for _, row in v3.iterrows()]) if not v3.empty else "—"
-                st.markdown(f"**{int(y)}** — Top 3 Retailers: {r_str}  
-Top 3 Vendors: {v_str}")
+                st.markdown(f"**{int(y)}** — Top 3 Retailers: {r_str}  Top 3 Vendors: {v_str}"
+
 )
 
         # -------------------------
