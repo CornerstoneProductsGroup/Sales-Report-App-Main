@@ -46,6 +46,8 @@ import pandas as pd
 import streamlit as st
 
 
+
+
 # -------------------------
 # App Constants / Default Paths
 # -------------------------
@@ -58,6 +60,12 @@ DEFAULT_YEAR_LOCKS = Path("data/year_locks.json")
 
 # Bundled vendor map (repo copy); used to seed DEFAULT_VENDOR_MAP if missing
 BUNDLED_VENDOR_MAP = Path("vendor_map.xlsx")
+
+# -------------------------
+# App Constants / Default Paths
+# -------------------------
+
+# Bundled vendor map (repo copy); used to seed DEFAULT_VENDOR_MAP if missing
 MONTH_NAME_TO_NUM = {
     "January": 1, "February": 2, "March": 3, "April": 4,
     "May": 5, "June": 6, "July": 7, "August": 8,
@@ -1151,7 +1159,6 @@ view_year = st.session_state.get('view_year', year)
 
 
 # Load vendor map (persistent)
-BUNDLED_VENDOR_MAP = Path(__file__).parent / "vendor_map.xlsx"
 
 # If a default vendor map hasn't been set yet, seed it from the bundled file in the repo.
 try:
