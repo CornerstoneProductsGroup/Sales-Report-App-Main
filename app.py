@@ -1093,7 +1093,6 @@ def wow_mom_metrics(df: pd.DataFrame) -> dict:
 def month_label(p: pd.Period) -> str:
     return p.to_timestamp().strftime("%B %Y")
 
- "Sales Report App"
 
 # -------------------------
 # App UI
