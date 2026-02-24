@@ -3819,67 +3819,7 @@ with tab_year_summary:
             conc.style.format({c: (lambda v: f"{v*100:.1f}%") for c in conc.columns if c != "Year"}),
             use_container_width=True,
             hide_index=True
-        
-        st.caption("Breakdown shows which retailers/vendors make up the Top 1 / Top 3 / Top 5 shares for each year.")
-
-        def _top_list(df_year, group_col, topn):
-            g = df_year.groupby(group_col, as_index=False).agg(val=(value_col, "sum"))
-            total = float(g["val"].sum())
-            if total <= 0:
-                return pd.DataFrame(columns=[group_col, value_col, "Share"])
-            g = g.sort_values("val", ascending=False).head(topn).copy()
-            g["Share"] = g["val"] / total
-            g = g.rename(columns={"val": value_col})
-            return g[[group_col, value_col, "Share"]]
-
-        with st.expander("Show Top Retailers/Vendors breakdown by year", expanded=False):
-            ypick = st.selectbox("Year for breakdown", options=years, index=len(years)-1, key="ys_conc_breakdown_year")
-            dy = d[d["Year"] == int(ypick)].copy()
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Retailers**")
-                t1 = _top_list(dy, "Retailer", 1)
-                t3 = _top_list(dy, "Retailer", 3)
-                t5 = _top_list(dy, "Retailer", 5)
-
-                st.markdown("Top 1 Retailer")
-                st.dataframe(t1.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
-                             use_container_width=True, hide_index=True)
-                st.markdown("Top 3 Retailers")
-                st.dataframe(t3.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
-                             use_container_width=True, hide_index=True)
-                st.markdown("Top 5 Retailers")
-                st.dataframe(t5.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
-                             use_container_width=True, hide_index=True)
-
-            with c2:
-                st.markdown("**Vendors**")
-                v1 = _top_list(dy, "Vendor", 1)
-                v3 = _top_list(dy, "Vendor", 3)
-                v5 = _top_list(dy, "Vendor", 5)
-
-                st.markdown("Top 1 Vendor")
-                st.dataframe(v1.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
-                             use_container_width=True, hide_index=True)
-                st.markdown("Top 3 Vendors")
-                st.dataframe(v3.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
-                             use_container_width=True, hide_index=True)
-                st.markdown("Top 5 Vendors")
-                st.dataframe(v5.style.format({value_col: fmt_currency if value_col=="Sales" else fmt_int, "Share": lambda v: f"{v*100:.1f}%"}),
-                             use_container_width=True, hide_index=True)
-
-        with st.expander("Show Top Retailers/Vendors for every year (compact list)", expanded=False):
-            for y in years:
-                dy = d[d["Year"] == int(y)].copy()
-                r3 = _top_list(dy, "Retailer", 3)
-                v3 = _top_list(dy, "Vendor", 3)
-                # compact strings
-                r_str = ", ".join([f"{row['Retailer']} ({row['Share']*100:.1f}%)" for _, row in r3.iterrows()]) if not r3.empty else "—"
-                v_str = ", ".join([f"{row['Vendor']} ({row['Share']*100:.1f}%)" for _, row in v3.iterrows()]) if not v3.empty else "—"
-                st.markdown(f"**{int(y)}** — Top 3 Retailers: {r_str}  
-Top 3 Vendors: {v_str}")
-)
+        )
 
         # -------------------------
         # Retailer summary (year pick ONLY here)
