@@ -1303,16 +1303,16 @@ def render_comparison_retailer_vendor():
         years = sorted(d["Year"].dropna().unique().tolist())
 
         mode = st.radio(
-            "Compare mode",
-            options=["Months", "Years"],
+            "Compare type",
+            options=["A vs B (Months)", "A vs B (Years)", "Multi-year (high/low highlight)"],
             index=0,
             horizontal=True,
-            key="cmp_mode_months_years"
+            key="cmp_mode_v2"
         )
 
         c1, c2, c3 = st.columns([2, 2, 1])
         with c3:
-            by = st.selectbox("Compare by", ["Retailer", "Vendor"], key="cmp_by")
+            by = st.selectbox("Compare by", ["Retailer", "Vendor"], key="cmp_by_v2")
 
         # Optional limiter list
         if by == "Retailer":
@@ -1320,38 +1320,12 @@ def render_comparison_retailer_vendor():
         else:
             options = sorted([v for v in d["Vendor"].dropna().unique().tolist() if str(v).strip()])
 
-        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, key="cmp_limit")
+        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, key="cmp_limit_v2")
 
-        if mode == "Months":
-            with c1:
-                a_pick = st.multiselect(
-                    "Selection A (one or more months)",
-                    options=month_labels,
-                    default=month_labels[-1:] if month_labels else [],
-                    key="cmp_a_months"
-                )
-            with c2:
-                b_pick = st.multiselect(
-                    "Selection B (one or more months)",
-                    options=month_labels,
-                    default=month_labels[-2:-1] if len(month_labels) >= 2 else [],
-                    key="cmp_b_months"
-                )
-
-            a_periods = [label_to_period[x] for x in a_pick if x in label_to_period]
-            b_periods = [label_to_period[x] for x in b_pick if x in label_to_period]
-
-            if not a_periods or not b_periods:
-                st.info("Pick at least one month in Selection A and Selection B.")
-                return
-
-            da = d[d["MonthP"].isin(a_periods)]
-            db = d[d["MonthP"].isin(b_periods)]
-
-            if sel:
-                da = da[da[by].isin(sel)]
-                db = db[db[by].isin(sel)]
-
+        # -------------------------
+        # Helper: render A vs B table
+        # -------------------------
+        def _render_a_vs_b(da: pd.DataFrame, db: pd.DataFrame, label_a: str, label_b: str):
             ga = da.groupby(by, as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
             gb = db.groupby(by, as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
 
@@ -1375,47 +1349,132 @@ def render_comparison_retailer_vendor():
 
             out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
 
-            disp = out[[by,"Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]]
+            disp = out[[by,"Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]].copy()
+            disp = disp.rename(columns={
+                "Units_A": f"Units ({label_a})",
+                "Sales_A": f"Sales ({label_a})",
+                "Units_B": f"Units ({label_b})",
+                "Sales_B": f"Sales ({label_b})",
+            })
+
             sty = disp.style.format({
-                "Units_A": fmt_int,
-                "Units_B": fmt_int,
+                f"Units ({label_a})": fmt_int,
+                f"Units ({label_b})": fmt_int,
                 "Units_Diff": fmt_int,
                 "Units_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-                "Sales_A": fmt_currency,
-                "Sales_B": fmt_currency,
+                f"Sales ({label_a})": fmt_currency,
+                f"Sales ({label_b})": fmt_currency,
                 "Sales_Diff": fmt_currency,
                 "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
             }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
 
             st.dataframe(sty, use_container_width=True, hide_index=True)
+
+        # -------------------------
+        # Mode 1: A vs B (Months)
+        # -------------------------
+        if mode == "A vs B (Months)":
+            with c1:
+                a_pick = st.multiselect(
+                    "Selection A (one or more months)",
+                    options=month_labels,
+                    default=month_labels[-1:] if month_labels else [],
+                    key="cmp_a_months_v2"
+                )
+            with c2:
+                b_pick = st.multiselect(
+                    "Selection B (one or more months)",
+                    options=month_labels,
+                    default=month_labels[-2:-1] if len(month_labels) >= 2 else [],
+                    key="cmp_b_months_v2"
+                )
+
+            a_periods = [label_to_period[x] for x in a_pick if x in label_to_period]
+            b_periods = [label_to_period[x] for x in b_pick if x in label_to_period]
+
+            if not a_periods or not b_periods:
+                st.info("Pick at least one month in Selection A and Selection B.")
+                return
+
+            da = d[d["MonthP"].isin(a_periods)]
+            db = d[d["MonthP"].isin(b_periods)]
+
+            if sel:
+                da = da[da[by].isin(sel)]
+                db = db[db[by].isin(sel)]
+
+            label_a = " + ".join(a_pick) if a_pick else "A"
+            label_b = " + ".join(b_pick) if b_pick else "B"
+            _render_a_vs_b(da, db, label_a, label_b)
             return
 
-        # Years mode (multi-year, up to ~5 years as requested)
+        # -------------------------
+        # Mode 2: A vs B (Years)
+        # Example: compare (2023+2024) vs (2024+2025)
+        # -------------------------
+        if mode == "A vs B (Years)":
+            with c1:
+                years_a = st.multiselect(
+                    "Selection A (one or more years)",
+                    options=years,
+                    default=years[-2:-1] if len(years) >= 2 else years,
+                    key="cmp_years_a_v2"
+                )
+            with c2:
+                years_b = st.multiselect(
+                    "Selection B (one or more years)",
+                    options=years,
+                    default=years[-1:] if years else [],
+                    key="cmp_years_b_v2"
+                )
+
+            if not years_a or not years_b:
+                st.info("Pick at least one year in Selection A and Selection B.")
+                return
+
+            da = d[d["Year"].isin([int(y) for y in years_a])]
+            db = d[d["Year"].isin([int(y) for y in years_b])]
+
+            if sel:
+                da = da[da[by].isin(sel)]
+                db = db[db[by].isin(sel)]
+
+            label_a = " + ".join([str(y) for y in years_a])
+            label_b = " + ".join([str(y) for y in years_b])
+            _render_a_vs_b(da, db, label_a, label_b)
+            return
+
+        # -------------------------
+        # Mode 3: Multi-year highlight table
+        # - pick 2..5 years
+        # - show Units_YYYY and Sales_YYYY columns
+        # - highlight highest and lowest per row (for Sales columns)
+        # -------------------------
         with c1:
             years_pick = st.multiselect(
-                "Years to compare (pick up to 5)",
+                "Years to view (pick 2 to 5)",
                 options=years,
                 default=years[-3:] if len(years) >= 3 else years,
-                key="cmp_years_pick"
+                key="cmp_years_pick_multi_v2"
             )
         with c2:
-            base_year = st.selectbox(
-                "Baseline year (for Δ columns)",
-                options=years_pick if years_pick else years,
-                index=0 if years_pick else 0,
-                key="cmp_years_baseline"
+            metric = st.selectbox(
+                "Highlight based on",
+                options=["Sales", "Units"],
+                index=0,
+                key="cmp_multi_metric_v2"
             )
 
-        years_pick = [int(y) for y in years_pick][:5]  # enforce max 5
-        if not years_pick:
-            st.info("Pick one or more years.")
+        years_pick = [int(y) for y in years_pick]
+        if len(years_pick) < 2:
+            st.info("Pick at least two years.")
             return
+        years_pick = years_pick[:5]
 
         dd = d[d["Year"].isin(years_pick)].copy()
         if sel:
             dd = dd[dd[by].isin(sel)]
 
-        # Pivot-like wide table with one column per year (Units/Sales)
         pieces = []
         for y in years_pick:
             gy = dd[dd["Year"] == int(y)].groupby(by, as_index=False).agg(**{
@@ -1430,50 +1489,140 @@ def render_comparison_retailer_vendor():
 
         out = out.fillna(0.0)
 
-        # Δ vs baseline (first year by default)
-        by_base = int(base_year) if base_year is not None else int(years_pick[0])
-        last_year = int(years_pick[-1])
-
-        if f"Units_{by_base}" in out.columns and f"Units_{last_year}" in out.columns:
-            out["Units_Δ"] = out[f"Units_{last_year}"] - out[f"Units_{by_base}"]
-            out["Units_%"] = out["Units_Δ"] / out[f"Units_{by_base}"].replace(0, np.nan)
-        else:
-            out["Units_Δ"] = 0.0
-            out["Units_%"] = np.nan
-
-        if f"Sales_{by_base}" in out.columns and f"Sales_{last_year}" in out.columns:
-            out["Sales_Δ"] = out[f"Sales_{last_year}"] - out[f"Sales_{by_base}"]
-            out["Sales_%"] = out["Sales_Δ"] / out[f"Sales_{by_base}"].replace(0, np.nan)
-        else:
-            out["Sales_Δ"] = 0.0
-            out["Sales_%"] = np.nan
-
-        # Totals row at bottom
+        # Totals row
         total = {by: "TOTAL"}
         for c in out.columns:
             if c == by:
                 continue
             total[c] = float(out[c].sum()) if pd.api.types.is_numeric_dtype(out[c]) else ""
-
         out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
 
-        # Order columns: by, year columns, deltas
-        year_cols = []
+        # Column order
+        cols = [by]
         for y in years_pick:
-            year_cols += [f"Units_{y}", f"Sales_{y}"]
-        cols = [by] + [c for c in year_cols if c in out.columns] + ["Units_Δ","Units_%","Sales_Δ","Sales_%"]
+            cols += [f"Units_{y}", f"Sales_{y}"]
         disp = out[cols].copy()
 
-        fmt = {}
-        for c in disp.columns:
-            if c.startswith("Units_") or c == "Units_Δ":
-                fmt[c] = fmt_int
-            if c.startswith("Sales_") or c == "Sales_Δ":
-                fmt[c] = fmt_currency
-        fmt["Units_%"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
-        fmt["Sales_%"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+        # Highlight: highest and lowest across selected years for chosen metric
+        metric_cols = [f"{metric}_{y}" for y in years_pick if f"{metric}_{y}" in disp.columns]
 
-        sty = disp.style.format(fmt).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Δ","Sales_Δ"])
+        # --- Extra insights (trend, CAGR, sparkline) ---
+        # Use the selected metric across the chosen years
+        spark_chars = ["▁","▂","▃","▄","▅","▆","▇","█"]
+
+        def _sparkline(vals):
+            vals = [float(v) if v is not None and not pd.isna(v) else np.nan for v in vals]
+            if len(vals) == 0 or all(pd.isna(v) for v in vals):
+                return ""
+            vmin = np.nanmin(vals)
+            vmax = np.nanmax(vals)
+            # all equal -> flat line
+            if np.isnan(vmin) or np.isnan(vmax) or np.isclose(vmin, vmax):
+                return "▁" * len(vals)
+            out_s = []
+            for v in vals:
+                if pd.isna(v):
+                    out_s.append(" ")
+                    continue
+                t = (v - vmin) / (vmax - vmin)
+                idx = int(round(t * (len(spark_chars) - 1)))
+                idx = max(0, min(len(spark_chars) - 1, idx))
+                out_s.append(spark_chars[idx])
+            return "".join(out_s)
+
+        def _pct_change(a, b):
+            try:
+                a = float(a); b = float(b)
+            except Exception:
+                return np.nan
+            if a == 0:
+                return np.nan
+            return (b - a) / a
+
+        def _cagr(a, b, periods):
+            try:
+                a = float(a); b = float(b)
+            except Exception:
+                return np.nan
+            if a <= 0 or b <= 0 or periods <= 0:
+                return np.nan
+            return (b / a) ** (1.0 / periods) - 1.0
+
+        # Build per-row series for chosen metric (exclude TOTAL row)
+        metric_year_cols = [(y, f"{metric}_{y}") for y in years_pick if f"{metric}_{y}" in disp.columns]
+        if metric_year_cols:
+            series_vals = disp[[c for _, c in metric_year_cols]].copy()
+
+            # Sparkline
+            disp["Spark"] = series_vals.apply(lambda r: _sparkline(r.tolist()), axis=1)
+
+            # Trend (first -> last)
+            first_col = metric_year_cols[0][1]
+            last_col = metric_year_cols[-1][1]
+            pct = series_vals.apply(lambda r: _pct_change(r[first_col], r[last_col]), axis=1)
+            disp["Trend"] = np.where(
+                pct.isna(),
+                "—",
+                np.where(pct > 0, "↑", np.where(pct < 0, "↓", "→"))
+            )
+            disp["Trend %"] = pct
+
+            # CAGR across (n_years - 1) intervals
+            periods = max(1, len(metric_year_cols) - 1)
+            disp["CAGR %"] = series_vals.apply(lambda r: _cagr(r[first_col], r[last_col], periods), axis=1)
+
+            # Clear insight columns on TOTAL row (if present)
+            try:
+                is_total = disp[by].astype(str) == "TOTAL"
+                for c in ["Spark", "Trend", "Trend %", "CAGR %"]:
+                    if c in disp.columns:
+                        disp.loc[is_total, c] = ""
+            except Exception:
+                pass
+
+        # Move insight columns next to the year columns
+        insight_cols = [c for c in ["Spark", "Trend", "Trend %", "CAGR %"] if c in disp.columns]
+        if insight_cols:
+            disp = disp[[by] + [c for c in disp.columns if c != by and c not in insight_cols] + insight_cols]
+        def _hl_minmax(row):
+            styles = [""] * len(row)
+            # Don't highlight TOTAL row
+            if str(row.iloc[0]) == "TOTAL":
+                return styles
+            vals = []
+            idxs = []
+            for j, c in enumerate(disp.columns):
+                if c in metric_cols:
+                    try:
+                        v = float(row[c])
+                    except Exception:
+                        v = np.nan
+                    vals.append(v)
+                    idxs.append(j)
+            if not vals:
+                return styles
+            vmin = np.nanmin(vals)
+            vmax = np.nanmax(vals)
+            # If all equal, no highlight
+            if np.isnan(vmin) or np.isnan(vmax) or np.isclose(vmin, vmax):
+                return styles
+            for v, j in zip(vals, idxs):
+                if np.isclose(v, vmax):
+                    styles[j] = "background-color: rgba(0, 200, 0, 0.18); font-weight: 600;"
+                elif np.isclose(v, vmin):
+                    styles[j] = "background-color: rgba(220, 0, 0, 0.14);"
+            return styles        fmt = {}
+        for c in disp.columns:
+            if c.startswith("Units_"):
+                fmt[c] = fmt_int
+            elif c.startswith("Sales_"):
+                fmt[c] = fmt_currency
+        if "Trend %" in disp.columns:
+            fmt["Trend %"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+        if "CAGR %" in disp.columns:
+            fmt["CAGR %"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+
+        sty = disp.style.format(fmt).apply(_hl_minmax, axis=1)
 
         st.dataframe(sty, use_container_width=True, hide_index=True)
 
