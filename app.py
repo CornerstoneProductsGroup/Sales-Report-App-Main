@@ -55,32 +55,20 @@ AVG_WINDOW_OPTIONS = ["4 weeks","5 weeks","6 weeks","7 weeks","8 weeks","9 weeks
                       "January","February","March","April","May","June","July","August","September","October","November","December"]
 
 def resolve_avg_use(avg_window, use_cols, current_year):
-    """Return which week columns to use for averaging.
+    """Return which week columns to use for averaging. Month choices are within current_year only.
 
-    Supports:
-      - Rolling windows like '8 weeks', '13 weeks', etc.
-      - Month names like 'January' (within current_year only)
-      - Month+Year like 'January 2026' (explicit year)
+    Notes:
+      - use_cols may be a list of datetime.date objects or strings.
+      - Convert to a Series so we can safely use .dt accessors.
     """
     if not use_cols:
         return []
-    # Month+Year like 'January 2026'
-    if isinstance(avg_window, str):
-        m = re.match(r"^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$", avg_window.strip())
-        if m:
-            mon, yy = m.group(1), int(m.group(2))
-            mnum = MONTH_NAME_TO_NUM.get(mon)
-            dates = pd.to_datetime(pd.Series(list(use_cols)), errors="coerce")
-            mask = (dates.dt.year == int(yy)) & (dates.dt.month == int(mnum))
-            return [c for c, ok in zip(use_cols, mask.fillna(False).tolist()) if ok]
-
-    # Month-only choices are within current_year only
     if isinstance(avg_window, str) and avg_window in MONTH_NAME_TO_NUM:
         mnum = MONTH_NAME_TO_NUM[avg_window]
         dates = pd.to_datetime(pd.Series(list(use_cols)), errors="coerce")
         mask = (dates.dt.year == int(current_year)) & (dates.dt.month == int(mnum))
-        return [c for c, ok in zip(use_cols, mask.fillna(False).tolist()) if ok]
-
+        cols = [c for c, ok in zip(use_cols, mask.fillna(False).tolist()) if ok]
+        return cols
     # rolling weeks like '8 weeks'
     if isinstance(avg_window, str) and "week" in avg_window:
         try:
@@ -88,9 +76,6 @@ def resolve_avg_use(avg_window, use_cols, current_year):
         except Exception:
             n = 4
         return use_cols[-n:] if len(use_cols) >= n else use_cols
-
-    return use_cols
-[-n:] if len(use_cols) >= n else use_cols
     return use_cols
 
 
@@ -1043,8 +1028,7 @@ def wow_mom_metrics(df: pd.DataFrame) -> dict:
     out["total_units"] = float(d["Units"].sum())
     out["total_sales"] = float(d["Sales"].fillna(0).sum())
 
-    periods_all = sorted(pd.to_datetime(df_all["StartDate"], errors="coerce").dropna().dt.date.unique().tolist())
-        periods = sorted(d["StartDate"].dropna().dt.date.unique().tolist())
+    periods = sorted(d["StartDate"].dropna().dt.date.unique().tolist())
     if len(periods) >= 1:
         cur_p = periods[-1]
         cur = d[d["StartDate"].dt.date == cur_p]
@@ -1386,40 +1370,7 @@ def render_comparison_retailer_vendor():
 
             st.dataframe(sty, use_container_width=True, hide_index=True)
 
-        
-        def _render_sku_movers(da: pd.DataFrame, db: pd.DataFrame, label_a: str, label_b: str):
-            """Top movers by SKU, combined across all retailers in the selection."""
-            sa = da.groupby("SKU", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
-            sb = db.groupby("SKU", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
-            out = sa.merge(sb, on="SKU", how="outer").fillna(0.0)
-            out["Units_Diff"] = out["Units_A"] - out["Units_B"]
-            out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
-
-            top_up = out.sort_values("Sales_Diff", ascending=False).head(10)
-            top_dn = out.sort_values("Sales_Diff", ascending=True).head(10)
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown(f"**Top 10 Increased SKUs ({label_a} vs {label_b})**")
-                st.dataframe(
-                    top_up[["SKU","Units_A","Sales_A","Units_B","Sales_B","Sales_Diff","Units_Diff"]].style.format({
-                        "Units_A": fmt_int, "Units_B": fmt_int, "Units_Diff": fmt_int,
-                        "Sales_A": fmt_currency, "Sales_B": fmt_currency, "Sales_Diff": fmt_currency
-                    }).applymap(lambda v: f"color: {_color(v)};", subset=["Sales_Diff","Units_Diff"]),
-                    use_container_width=True,
-                    hide_index=True
-                )
-            with c2:
-                st.markdown(f"**Top 10 Decreased SKUs ({label_a} vs {label_b})**")
-                st.dataframe(
-                    top_dn[["SKU","Units_A","Sales_A","Units_B","Sales_B","Sales_Diff","Units_Diff"]].style.format({
-                        "Units_A": fmt_int, "Units_B": fmt_int, "Units_Diff": fmt_int,
-                        "Sales_A": fmt_currency, "Sales_B": fmt_currency, "Sales_Diff": fmt_currency
-                    }).applymap(lambda v: f"color: {_color(v)};", subset=["Sales_Diff","Units_Diff"]),
-                    use_container_width=True,
-                    hide_index=True
-                )
-# -------------------------
+        # -------------------------
         # Mode 1: A vs B (Months)
         # -------------------------
         if mode == "A vs B (Months)":
@@ -1455,9 +1406,6 @@ def render_comparison_retailer_vendor():
             label_a = " + ".join(a_pick) if a_pick else "A"
             label_b = " + ".join(b_pick) if b_pick else "B"
             _render_a_vs_b(da, db, label_a, label_b)
-
-            st.divider()
-            _render_sku_movers(da, db, label_a, label_b)
             return
 
         # -------------------------
@@ -1494,9 +1442,6 @@ def render_comparison_retailer_vendor():
             label_a = " + ".join([str(y) for y in years_a])
             label_b = " + ".join([str(y) for y in years_b])
             _render_a_vs_b(da, db, label_a, label_b)
-
-            st.divider()
-            _render_sku_movers(da, db, label_a, label_b)
             return
 
         # -------------------------
@@ -1681,205 +1626,127 @@ def render_comparison_retailer_vendor():
 
         sty = disp.style.format(fmt).apply(_hl_minmax, axis=1)
 
-        st.divider()
-        # Movers vs earliest vs latest year (SKU totals across all retailers)
-        y0 = int(years_pick[0]); y1 = int(years_pick[-1])
-        da = d[d["Year"] == y1].copy()
-        db = d[d["Year"] == y0].copy()
-        label_a = str(y1)
-        label_b = str(y0)
-        _render_sku_movers(da, db, label_a, label_b)
-
         st.dataframe(sty, use_container_width=True, hide_index=True)
 
 
 
 def render_comparison_sku():
-        st.subheader("SKU Comparison")
+        st.subheader("SKU Comparison (Month vs Month / Multi-month)")
 
         if df.empty:
             st.info("No sales data yet.")
-            return
+        else:
+            d = df_all.copy()
+            d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+            d = d[d["StartDate"].notna()].copy()
 
-        d = df_all.copy()
-        d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
-        d = d[d["StartDate"].notna()].copy()
+            # Month options across ALL years
+            d["MonthP"] = d["StartDate"].dt.to_period("M")
+            months = sorted(d["MonthP"].unique().tolist())
+            month_labels = [m.to_timestamp().strftime("%B %Y") for m in months]
+            label_to_period = dict(zip(month_labels, months))
 
-        d["MonthP"] = d["StartDate"].dt.to_period("M")
-        months = sorted(d["MonthP"].unique().tolist())
-        month_labels = [m.to_timestamp().strftime("%B %Y") for m in months]
-        label_to_period = dict(zip(month_labels, months))
-
-        d["Year"] = d["StartDate"].dt.year.astype(int)
-        years = sorted(d["Year"].dropna().unique().tolist())
-
-        mode = st.radio(
-            "Compare type",
-            options=["A vs B (Months)", "A vs B (Years)", "Multi-year (high/low highlight)"],
-            index=0,
-            horizontal=True,
-            key="skucmp_mode_v2"
-        )
-
-        # Optional filter by Retailer or Vendor (same as before)
-        by = st.selectbox("Filter by", ["Retailer", "Vendor"], key="skucmp_filter_by_v2")
-        filt_options = sorted([x for x in d[by].dropna().unique().tolist() if str(x).strip()])
-        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=filt_options, key="skucmp_limit_v2")
-
-        if sel:
-            d = d[d[by].isin(sel)]
-
-        def _sku_a_vs_b(da, db, label_a, label_b):
-            ga = da.groupby("SKU", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
-            gb = db.groupby("SKU", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
-            out = ga.merge(gb, on="SKU", how="outer").fillna(0.0)
-            out["Units_Diff"] = out["Units_A"] - out["Units_B"]
-            out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
-            out["Units_%"] = out["Units_Diff"] / out["Units_B"].replace(0, np.nan)
-            out["Sales_%"] = out["Sales_Diff"] / out["Sales_B"].replace(0, np.nan)
-
-            out = out.sort_values(["Sales_Diff","Units_Diff"], ascending=False, kind="mergesort")
-
-            total = {
-                "SKU": "TOTAL",
-                "Units_A": float(out["Units_A"].sum()),
-                "Sales_A": float(out["Sales_A"].sum()),
-                "Units_B": float(out["Units_B"].sum()),
-                "Sales_B": float(out["Sales_B"].sum()),
-            }
-            total["Units_Diff"] = total["Units_A"] - total["Units_B"]
-            total["Sales_Diff"] = total["Sales_A"] - total["Sales_B"]
-            total["Units_%"] = (total["Units_Diff"] / total["Units_B"]) if total["Units_B"] else np.nan
-            total["Sales_%"] = (total["Sales_Diff"] / total["Sales_B"]) if total["Sales_B"] else np.nan
-            out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
-
-            disp = out[["SKU","Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]].copy()
-            disp = disp.rename(columns={
-                "Units_A": f"Units ({label_a})",
-                "Sales_A": f"Sales ({label_a})",
-                "Units_B": f"Units ({label_b})",
-                "Sales_B": f"Sales ({label_b})",
-            })
-
-            sty = disp.style.format({
-                f"Units ({label_a})": fmt_int,
-                f"Units ({label_b})": fmt_int,
-                "Units_Diff": fmt_int,
-                "Units_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-                f"Sales ({label_a})": fmt_currency,
-                f"Sales ({label_b})": fmt_currency,
-                "Sales_Diff": fmt_currency,
-                "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-            }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
-
-            st.dataframe(sty, use_container_width=True, hide_index=True)
-
-        if mode == "A vs B (Months)":
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns([2, 2, 1])
             with c1:
-                a_pick = st.multiselect("Selection A (one or more months)", options=month_labels,
-                                        default=month_labels[-1:] if month_labels else [], key="skucmp_a_months_v2")
+                a_pick = st.multiselect(
+                    "Selection A (one or more months)",
+                    options=month_labels,
+                    default=month_labels[-1:] if month_labels else [],
+                    key="skucmp_a_months"
+                )
             with c2:
-                b_pick = st.multiselect("Selection B (one or more months)", options=month_labels,
-                                        default=month_labels[-2:-1] if len(month_labels) >= 2 else [], key="skucmp_b_months_v2")
+                b_pick = st.multiselect(
+                    "Selection B (one or more months)",
+                    options=month_labels,
+                    default=month_labels[-2:-1] if len(month_labels) >= 2 else [],
+                    key="skucmp_b_months"
+                )
+            with c3:
+                by = st.selectbox("Filter by", ["Retailer", "Vendor"], key="skucmp_filter_by")
+
+            filt_options = sorted([x for x in d[by].dropna().unique().tolist() if str(x).strip()])
+            sel = st.multiselect(f"Limit to {by}(s) (optional)", options=filt_options, key="skucmp_limit")
+
             a_periods = [label_to_period[x] for x in a_pick if x in label_to_period]
             b_periods = [label_to_period[x] for x in b_pick if x in label_to_period]
+
             if not a_periods or not b_periods:
                 st.info("Pick at least one month in Selection A and Selection B.")
-                return
-            da = d[d["MonthP"].isin(a_periods)]
-            db = d[d["MonthP"].isin(b_periods)]
-            _sku_a_vs_b(da, db, " + ".join(a_pick), " + ".join(b_pick))
-            return
+            else:
+                da = d[d["MonthP"].isin(a_periods)]
+                db = d[d["MonthP"].isin(b_periods)]
 
-        if mode == "A vs B (Years)":
-            c1, c2 = st.columns(2)
-            with c1:
-                years_a = st.multiselect("Selection A (one or more years)", options=years,
-                                         default=years[-2:-1] if len(years) >= 2 else years, key="skucmp_years_a_v2")
-            with c2:
-                years_b = st.multiselect("Selection B (one or more years)", options=years,
-                                         default=years[-1:] if years else [], key="skucmp_years_b_v2")
-            if not years_a or not years_b:
-                st.info("Pick at least one year in Selection A and Selection B.")
-                return
-            da = d[d["Year"].isin([int(y) for y in years_a])]
-            db = d[d["Year"].isin([int(y) for y in years_b])]
-            _sku_a_vs_b(da, db, " + ".join([str(y) for y in years_a]), " + ".join([str(y) for y in years_b]))
-            return
+                if sel:
+                    da = da[da[by].isin(sel)]
+                    db = db[db[by].isin(sel)]
 
-        # Multi-year highlight (SKU totals)
-        years_pick = st.multiselect("Years to view (pick 2 to 5)", options=years,
-                                    default=years[-3:] if len(years) >= 3 else years, key="skucmp_years_pick_multi_v2")
-        years_pick = [int(y) for y in years_pick][:5]
-        metric = st.selectbox("Highlight based on", options=["Sales", "Units"], index=0, key="skucmp_multi_metric_v2")
-        if len(years_pick) < 2:
-            st.info("Pick at least two years.")
-            return
+                # If filtering by Vendor, show Retailer column by grouping SKU x Retailer
+                group_keys = ["SKU"]
+                if by == "Vendor":
+                    group_keys = ["SKU", "Retailer"]
 
-        dd = d[d["Year"].isin(years_pick)].copy()
-        pieces = []
-        for y in years_pick:
-            gy = dd[dd["Year"] == int(y)].groupby("SKU", as_index=False).agg(**{
-                f"Units_{y}": ("Units", "sum"),
-                f"Sales_{y}": ("Sales", "sum"),
-            })
-            pieces.append(gy)
-        out = pieces[0]
-        for p in pieces[1:]:
-            out = out.merge(p, on="SKU", how="outer")
-        out = out.fillna(0.0)
+                ga = da.groupby(group_keys, as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
+                gb = db.groupby(group_keys, as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
 
-        # Totals row
-        total = {"SKU": "TOTAL"}
-        for c in out.columns:
-            if c == "SKU":
-                continue
-            total[c] = float(out[c].sum()) if pd.api.types.is_numeric_dtype(out[c]) else ""
-        out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
+                out = ga.merge(gb, on=group_keys, how="outer").fillna(0.0)
+                out["Units_Diff"] = out["Units_A"] - out["Units_B"]
+                out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
+                out["Units_%"] = out["Units_Diff"] / out["Units_B"].replace(0, np.nan)
+                out["Sales_%"] = out["Sales_Diff"] / out["Sales_B"].replace(0, np.nan)
 
-        cols = ["SKU"]
-        for y in years_pick:
-            cols += [f"Units_{y}", f"Sales_{y}"]
-        disp = out[cols].copy()
+                # Vendor from vendor map (helpful when filtering by Retailer)
+                try:
+                    if isinstance(vmap, pd.DataFrame) and "SKU" in vmap.columns and "Vendor" in vmap.columns:
+                        sku_vendor = vmap[["SKU","Vendor"]].drop_duplicates()
+                        out = out.merge(sku_vendor, on="SKU", how="left")
+                except Exception:
+                    pass
 
-        metric_cols = [f"{metric}_{y}" for y in years_pick if f"{metric}_{y}" in disp.columns]
+                # Default sort (no dropdown): biggest Sales difference first, then Units difference
+                out = out.sort_values(["Sales_Diff","Units_Diff"], ascending=False, kind="mergesort")
 
-        def _hl_minmax(row):
-            styles = [""] * len(row)
-            if str(row.iloc[0]) == "TOTAL":
-                return styles
-            vals = []
-            idxs = []
-            for j, c in enumerate(disp.columns):
-                if c in metric_cols:
-                    try:
-                        v = float(row[c])
-                    except Exception:
-                        v = np.nan
-                    vals.append(v)
-                    idxs.append(j)
-            if not vals:
-                return styles
-            vmin = np.nanmin(vals)
-            vmax = np.nanmax(vals)
-            if np.isnan(vmin) or np.isnan(vmax) or np.isclose(vmin, vmax):
-                return styles
-            for v, j in zip(vals, idxs):
-                if np.isclose(v, vmax):
-                    styles[j] = "background-color: rgba(0, 200, 0, 0.18); font-weight: 600;"
-                elif np.isclose(v, vmin):
-                    styles[j] = "background-color: rgba(220, 0, 0, 0.14);"
-            return styles
+                # Totals row
+                total = {
+                    "SKU": "TOTAL",
+                    "Retailer": "",
+                    "Vendor": "",
+                    "Units_A": float(out["Units_A"].sum()),
+                    "Sales_A": float(out["Sales_A"].sum()),
+                    "Units_B": float(out["Units_B"].sum()),
+                    "Sales_B": float(out["Sales_B"].sum()),
+                    "Units_Diff": float(out["Units_Diff"].sum()),
+                    "Sales_Diff": float(out["Sales_Diff"].sum()),
+                    "Units_%": (float(out["Units_Diff"].sum()) / float(out["Units_B"].sum())) if float(out["Units_B"].sum()) else np.nan,
+                    "Sales_%": (float(out["Sales_Diff"].sum()) / float(out["Sales_B"].sum())) if float(out["Sales_B"].sum()) else np.nan,
+                }
+                out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
 
-        fmt = {}
-        for c in disp.columns:
-            if c.startswith("Units_"):
-                fmt[c] = fmt_int
-            elif c.startswith("Sales_"):
-                fmt[c] = fmt_currency
+                cols = ["SKU"]
+                if by == "Vendor" and "Retailer" in out.columns:
+                    cols.append("Retailer")
+                if by == "Retailer" and "Vendor" in out.columns:
+                    cols.append("Vendor")
+                cols += ["Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]
 
-        st.dataframe(disp.style.format(fmt).apply(_hl_minmax, axis=1), use_container_width=True, hide_index=True)
+                disp = make_unique_columns(out[cols])
+
+                sty = disp.style.format({
+                    "Units_A": fmt_int,
+                    "Units_B": fmt_int,
+                    "Units_Diff": fmt_int,
+                    "Units_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+                    "Sales_A": fmt_currency,
+                    "Sales_B": fmt_currency,
+                    "Sales_Diff": fmt_currency,
+                    "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+                }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
+
+                st.dataframe(sty, use_container_width=True, hide_index=True)
+
+
+    # -------------------------
+    # SKU Health
+    # -------------------------
 
 
 def render_sku_health():
@@ -2130,33 +1997,6 @@ def render_lost_sales():
         lost_disp = lost[["SKU"] + (["Vendor"] if "Vendor" in lost.columns else []) + ["A"]].copy().rename(columns={"A": str(base_year)})
         lost_disp = make_unique_columns(lost_disp)
         st.dataframe(lost_disp.style.format({str(base_year): _fmt}), use_container_width=True, hide_index=True, height=650)
-
-        # Gained SKUs: 0 in base period, >0 in compare period
-        gained = out[(out["Sales_A"] == 0) & (out["Sales_B"] > 0)].copy()
-        st.markdown("### Gained SKUs")
-        st.dataframe(
-            gained.head(500).style.format({
-                "Sales_A": fmt_currency, "Sales_B": fmt_currency, "Δ Sales": fmt_currency,
-                "Units_A": fmt_int, "Units_B": fmt_int, "Δ Units": fmt_int,
-            }).applymap(lambda v: f"color: {_color(v)};", subset=["Δ Sales","Δ Units"]),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        # Net change summary (Gained - Lost)
-        lost_tot_units = float(lost["Δ Units"].sum()) if "Δ Units" in lost.columns else 0.0
-        lost_tot_sales = float(lost["Δ Sales"].sum()) if "Δ Sales" in lost.columns else 0.0
-        gained_tot_units = float(gained["Δ Units"].sum()) if "Δ Units" in gained.columns else 0.0
-        gained_tot_sales = float(gained["Δ Sales"].sum()) if "Δ Sales" in gained.columns else 0.0
-
-        net_units = gained_tot_units + lost_tot_units
-        net_sales = gained_tot_sales + lost_tot_sales
-
-        st.markdown(
-            f"**Net Units (Gained + Lost):** <span style='color:{_color(net_units)}; font-weight:700;'>{fmt_int(net_units)}</span> &nbsp;&nbsp; "
-            f"**Net Sales (Gained + Lost):** <span style='color:{_color(net_sales)}; font-weight:700;'>{fmt_currency(net_sales)}</span>",
-            unsafe_allow_html=True
-        )
 
         st.markdown("### Biggest declines (still selling, but down)")
         drops_disp = drops[["SKU"] + (["Vendor"] if "Vendor" in drops.columns else []) + ["A","B","Delta","Pct"]].copy()
@@ -3092,8 +2932,7 @@ with tab_totals_dash:
             with w2:
                 avg_opt = st.selectbox(
                     "Average window",
-                    options=["4 weeks", "6 weeks", "8 weeks", "13 weeks", "26 weeks", "52 weeks"] + month_year_list,
-
+                    options=["4 weeks", "8 weeks", "12 weeks"] + month_list,
                     index=1,
                     key="td_avg_weeks"
                 )
@@ -3685,7 +3524,7 @@ with tab_data_mgmt:
         render_bulk_data_upload()
 
 with tab_year_summary:
-    st.subheader("Year Summary")
+    st.subheader("Year Summary (YoY)")
 
     if df_all.empty:
         st.info("No sales data yet.")
@@ -3696,103 +3535,119 @@ with tab_year_summary:
         d["Year"] = d["StartDate"].dt.year.astype(int)
 
         years = sorted(d["Year"].unique().tolist())
-        if len(years) < 1:
-            st.info("No dated rows available.")
-            st.stop()
+        c1, c2 = st.columns(2)
+        with c1:
+            base_year = st.selectbox("Base Year", options=years, index=0, key="ys_base")
+        with c2:
+            comp_opts = [y for y in years if y != int(base_year)]
+        if not comp_opts:
+            st.warning("Only one year of data available. Add another year to compare.")
+            comp_year = int(base_year)  # fallback
+        else:
+            comp_year = st.selectbox("Comparison Year", options=comp_opts, index=0, key="ys_comp")
 
-        current_year = int(max(years))
-        prior_year = int(sorted(years)[-2]) if len(years) >= 2 else None
-
-        basis = st.radio("Basis", options=["Sales", "Units"], index=0, horizontal=True, key="ys_basis_v2")
+        basis = st.radio("Basis (tables + drivers)", options=["Sales", "Units"], index=0, horizontal=True, key="ys_basis")
         value_col = "Sales" if basis == "Sales" else "Units"
 
-        cur = d[d["Year"] == current_year].copy()
-        prv = d[d["Year"] == prior_year].copy() if prior_year is not None else d.iloc[0:0].copy()
+        a = d[d["Year"] == int(base_year)].copy()
+        b = d[d["Year"] == int(comp_year)].copy()
 
-        def _sum(df_, col):
-            return float(df_[col].sum()) if df_ is not None and not df_.empty else 0.0
+        # KPIs
+        def _sum(df_, col): 
+            return float(df_[col].sum()) if not df_.empty else 0.0
 
-        # -------------------------
-        # KPIs (always last 2 years)
-        # -------------------------
-        st.markdown("### KPIs (latest two years)")
+        uA, uB = _sum(a, "Units"), _sum(b, "Units")
+        sA, sB = _sum(a, "Sales"), _sum(b, "Sales")
+        uD, sD = uB - uA, sB - sA
+        uP = (uD / uA) if uA else np.nan
+        sP = (sD / sA) if sA else np.nan
 
-        uC, sC = _sum(cur, "Units"), _sum(cur, "Sales")
-        uP, sP = (_sum(prv, "Units") if prior_year is not None else 0.0), (_sum(prv, "Sales") if prior_year is not None else 0.0)
-
-        uD = uC - uP
-        sD = sC - sP
-        uPct = (uD / uP) if uP else np.nan
-        sPct = (sD / sP) if sP else np.nan
-
-        # All-years context (vs average of all years)
-        yr_tot = d.groupby("Year", as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum")).sort_values("Year")
-        avg_units = float(yr_tot["Units"].mean()) if not yr_tot.empty else 0.0
-        avg_sales = float(yr_tot["Sales"].mean()) if not yr_tot.empty else 0.0
-        delta_vs_avg_units = uC - avg_units
-        delta_vs_avg_sales = sC - avg_sales
-
-        k1, k2, k3, k4, k5, k6 = st.columns(6)
-        k1.metric(f"Units ({current_year})", fmt_int(uC))
-        if prior_year is not None:
-            k2.metric(f"Units ({prior_year})", fmt_int(uP), delta=f"{fmt_int(uD)} ({uPct*100:.1f}%)" if pd.notna(uPct) else fmt_int(uD))
-        else:
-            k2.metric("Units (prior)", "—")
-        k3.metric(f"Sales ({current_year})", fmt_currency(sC))
-        if prior_year is not None:
-            k4.metric(f"Sales ({prior_year})", fmt_currency(sP), delta=f"{fmt_currency_signed(sD)} ({sPct*100:.1f}%)" if pd.notna(sPct) else fmt_currency_signed(sD))
-        else:
-            k4.metric("Sales (prior)", "—")
-
-        k5.markdown(f"**Δ Units vs all-years avg**<br><span style='color:{_color(delta_vs_avg_units)}; font-weight:700;'>{fmt_int(delta_vs_avg_units)}</span>", unsafe_allow_html=True)
-        k6.markdown(f"**Δ Sales vs all-years avg**<br><span style='color:{_color(delta_vs_avg_sales)}; font-weight:700;'>{fmt_currency_signed(delta_vs_avg_sales)}</span>", unsafe_allow_html=True)
+        st.markdown("### KPIs")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric(f"Units ({base_year})", fmt_int(uA), delta=f"{fmt_int(uD)} ({uP*100:.1f}%)" if pd.notna(uP) else fmt_int(uD))
+        k2.metric(f"Units ({comp_year})", fmt_int(uB))
+        k3.metric(f"Sales ({base_year})", fmt_currency(sA), delta=f"{fmt_currency_signed(sD)} ({sP*100:.1f}%)" if pd.notna(sP) else fmt_currency_signed(sD))
+        k4.metric(f"Sales ({comp_year})", fmt_currency(sB))
 
         # -------------------------
-        # YoY driver breakdown (still uses latest two years)
+        # YoY driver breakdown (toggle)
         # -------------------------
-        if prior_year is not None:
-            st.markdown("### YoY driver breakdown (latest two years)")
+        st.markdown("### YoY driver breakdown")
 
-            a = prv
-            b = cur
+        sku_a = a.groupby("SKU", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
+        sku_b = b.groupby("SKU", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
+        sku = sku_a.merge(sku_b, on="SKU", how="outer").fillna(0.0)
 
-            sku_a = a.groupby("SKU", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
-            sku_b = b.groupby("SKU", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
-            sku = sku_a.merge(sku_b, on="SKU", how="outer").fillna(0.0)
-            sku["Δ Units"] = sku["Units_B"] - sku["Units_A"]
-            sku["Δ Sales"] = sku["Sales_B"] - sku["Sales_A"]
+        sku["A_val"] = sku["Sales_A"] if value_col == "Sales" else sku["Units_A"]
+        sku["B_val"] = sku["Sales_B"] if value_col == "Sales" else sku["Units_B"]
+        sku["Delta"] = sku["B_val"] - sku["A_val"]
 
-            # top movers in chosen basis
-            mover_col = "Δ Sales" if value_col == "Sales" else "Δ Units"
-            tn = sku.sort_values(mover_col, ascending=False).head(10).copy()
-            tn2 = sku.sort_values(mover_col, ascending=True).head(10).copy()
+        sku["Bucket"] = "Same (flat)"
+        sku.loc[(sku["A_val"] == 0) & (sku["B_val"] > 0), "Bucket"] = "New SKUs"
+        sku.loc[(sku["A_val"] > 0) & (sku["B_val"] == 0), "Bucket"] = "Lost SKUs"
+        sku.loc[(sku["A_val"] > 0) & (sku["B_val"] > 0) & (sku["Delta"] > 0), "Bucket"] = "Same SKUs – Growth"
+        sku.loc[(sku["A_val"] > 0) & (sku["B_val"] > 0) & (sku["Delta"] < 0), "Bucket"] = "Same SKUs – Decline"
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("**Top 10 Increases**")
-                tn_disp = tn[["SKU","Units_A","Units_B","Δ Units","Sales_A","Sales_B","Δ Sales"]]
-                st.dataframe(
-                    tn_disp.style.format({
-                        "Units_A": fmt_int, "Units_B": fmt_int, "Δ Units": fmt_int,
-                        "Sales_A": fmt_currency, "Sales_B": fmt_currency, "Δ Sales": fmt_currency,
-                    }).applymap(lambda v: f"color: {_color(v)};", subset=["Δ Units","Δ Sales"]),
-                    use_container_width=True, height=_table_height(tn_disp, max_px=700), hide_index=True
-                )
-            with c2:
-                st.markdown("**Top 10 Decreases**")
-                tn2_disp = tn2[["SKU","Units_A","Units_B","Δ Units","Sales_A","Sales_B","Δ Sales"]]
-                st.dataframe(
-                    tn2_disp.style.format({
-                        "Units_A": fmt_int, "Units_B": fmt_int, "Δ Units": fmt_int,
-                        "Sales_A": fmt_currency, "Sales_B": fmt_currency, "Δ Sales": fmt_currency,
-                    }).applymap(lambda v: f"color: {_color(v)};", subset=["Δ Units","Δ Sales"]),
-                    use_container_width=True, height=_table_height(tn2_disp, max_px=700), hide_index=True
-                )
+        total_delta = float(sku["Delta"].sum())
+
+        def _b(name):
+            return float(sku.loc[sku["Bucket"] == name, "Delta"].sum())
+
+        b_new, b_lost = _b("New SKUs"), _b("Lost SKUs")
+        b_grow, b_decl = _b("Same SKUs – Growth"), _b("Same SKUs – Decline")
+
+        def _pct(x):
+            return (x / total_delta) if total_delta else np.nan
+
+        def _fmt(v):
+            return fmt_currency_signed(v) if value_col == "Sales" else fmt_int_signed(v)
+
+        cD1, cD2, cD3, cD4 = st.columns(4)
+        cD1.metric("New SKUs", _fmt(b_new), delta=(f"{_pct(b_new)*100:.1f}%" if pd.notna(_pct(b_new)) else "—"))
+        cD2.metric("Lost SKUs", _fmt(b_lost), delta=(f"{_pct(b_lost)*100:.1f}%" if pd.notna(_pct(b_lost)) else "—"))
+        cD3.metric("Same SKUs – Growth", _fmt(b_grow), delta=(f"{_pct(b_grow)*100:.1f}%" if pd.notna(_pct(b_grow)) else "—"))
+        cD4.metric("Same SKUs – Decline", _fmt(b_decl), delta=(f"{_pct(b_decl)*100:.1f}%" if pd.notna(_pct(b_decl)) else "—"))
+
+        with st.expander("Top SKU drivers", expanded=False):
+            tp = sku.sort_values("Delta", ascending=False).head(25).copy()
+            tn = sku.sort_values("Delta", ascending=True).head(25).copy()
+
+            tp2 = tp[["SKU","A_val","B_val","Delta","Bucket"]].rename(columns={"A_val": str(base_year), "B_val": str(comp_year)})
+            tn2 = tn[["SKU","A_val","B_val","Delta","Bucket"]].rename(columns={"A_val": str(base_year), "B_val": str(comp_year)})
+
+            st.markdown("**Top increases**")
+            tp2_disp = tp2.copy()
+            # Avoid Styler (pyarrow duplicate-column edge cases). Format numbers as strings.
+            colA = str(base_year)
+            colB = str(comp_year)
+            if colA == colB:
+                colA = f"{colA} (A)"
+                colB = f"{colB} (B)"
+                tp2_disp = tp2_disp.rename(columns={str(base_year): colA, str(comp_year): colB})
+            num_cols = [c for c in [colA, colB, "Delta"] if c in tp2_disp.columns]
+            for c in num_cols:
+                tp2_disp[c] = tp2_disp[c].apply(_fmt)
+            tp2_disp = make_unique_columns(tp2_disp)
+            st.dataframe(tp2_disp, use_container_width=True, height=_table_height(tp2_disp, max_px=700), hide_index=True)
+
+            st.markdown("**Top decreases**")
+            tn2_disp = tn2.copy()
+            colA = str(base_year)
+            colB = str(comp_year)
+            if colA == colB:
+                colA = f"{colA} (A)"
+                colB = f"{colB} (B)"
+                tn2_disp = tn2_disp.rename(columns={str(base_year): colA, str(comp_year): colB})
+            num_cols = [c for c in [colA, colB, "Delta"] if c in tn2_disp.columns]
+            for c in num_cols:
+                tn2_disp[c] = tn2_disp[c].apply(_fmt)
+            tn2_disp = make_unique_columns(tn2_disp)
+            st.dataframe(tn2_disp, use_container_width=True, height=_table_height(tn2_disp, max_px=700), hide_index=True)
 
         # -------------------------
-        # Concentration risk (ALL YEARS, Retailer + Vendor only)
+        # Concentration risk (uses same toggle)
         # -------------------------
-        st.markdown("### Concentration risk (all years)")
+        st.markdown("### Concentration risk")
 
         def _top_share(df_year, group_col, topn):
             g = df_year.groupby(group_col, as_index=False).agg(val=(value_col, "sum"))
@@ -3801,142 +3656,44 @@ with tab_year_summary:
                 return 0.0
             return float(g.sort_values("val", ascending=False).head(topn)["val"].sum()) / total
 
-        conc_rows = []
-        for y in years:
-            dy = d[d["Year"] == int(y)].copy()
-            conc_rows.append({
-                "Year": int(y),
-                "Top 1 Retailer %": _top_share(dy, "Retailer", 1),
-                "Top 3 Retailers %": _top_share(dy, "Retailer", 3),
-                "Top 5 Retailers %": _top_share(dy, "Retailer", 5),
-                "Top 1 Vendor %": _top_share(dy, "Vendor", 1),
-                "Top 3 Vendors %": _top_share(dy, "Vendor", 3),
-                "Top 5 Vendors %": _top_share(dy, "Vendor", 5),
-            })
+        conc = pd.DataFrame([
+            {
+                "Year": int(base_year),
+                "Top 1 Retailer %": _top_share(a, "Retailer", 1),
+                "Top 3 Retailers %": _top_share(a, "Retailer", 3),
+                "Top 5 Retailers %": _top_share(a, "Retailer", 5),
+                "Top 1 Vendor %": _top_share(a, "Vendor", 1),
+                "Top 3 Vendors %": _top_share(a, "Vendor", 3),
+                "Top 5 Vendors %": _top_share(a, "Vendor", 5),
+            },
+            {
+                "Year": int(comp_year),
+                "Top 1 Retailer %": _top_share(b, "Retailer", 1),
+                "Top 3 Retailers %": _top_share(b, "Retailer", 3),
+                "Top 5 Retailers %": _top_share(b, "Retailer", 5),
+                "Top 1 Vendor %": _top_share(b, "Vendor", 1),
+                "Top 3 Vendors %": _top_share(b, "Vendor", 3),
+                "Top 5 Vendors %": _top_share(b, "Vendor", 5),
+            },
+        ])
 
-        conc = pd.DataFrame(conc_rows).sort_values("Year")
-        st.dataframe(
-            conc.style.format({c: (lambda v: f"{v*100:.1f}%") for c in conc.columns if c != "Year"}),
-            use_container_width=True,
-            hide_index=True
-        
-        st.caption("Breakdown shows which retailers/vendors make up the Top 1 / Top 3 / Top 5 shares for each year.")
-
-        def _top_list(df_year, group_col, topn):
-            g = df_year.groupby(group_col, as_index=False).agg(val=(value_col, "sum"))
-            total = float(g["val"].sum())
-            if total <= 0:
-                return pd.DataFrame(columns=[group_col, value_col, "Share"])
-            g = g.sort_values("val", ascending=False).head(topn).copy()
-            g["Share"] = g["val"] / total
-            g = g.rename(columns={"val": value_col})
-            return g[[group_col, value_col, "Share"]]
-
-        
-        st.caption("Click a year to expand the Top 1 / Top 3 / Top 5 breakdown. Click again to collapse.")
-
-        def _top_list(df_year, group_col, topn):
-            g = df_year.groupby(group_col, as_index=False).agg(val=(value_col, "sum"))
-            total = float(g["val"].sum())
-            if total <= 0:
-                return pd.DataFrame(columns=[group_col, value_col, "Share"])
-            g = g.sort_values("val", ascending=False).head(topn).copy()
-            g["Share"] = g["val"] / total
-            g = g.rename(columns={"val": value_col})
-            return g[[group_col, value_col, "Share"]]
-
-        # Accordion: one expander per year
-        for y in years:
-            dy = d[d["Year"] == int(y)].copy()
-            with st.expander(f"{int(y)} — Top 1 / Top 3 / Top 5 breakdown", expanded=False):
-                c1, c2 = st.columns(2)
-
-                with c1:
-                    st.markdown("**Retailers**")
-                    t1 = _top_list(dy, "Retailer", 1)
-                    t3 = _top_list(dy, "Retailer", 3)
-                    t5 = _top_list(dy, "Retailer", 5)
-
-                    st.markdown("Top 1 Retailer")
-                    st.dataframe(
-                        t1.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 3 Retailers")
-                    st.dataframe(
-                        t3.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 5 Retailers")
-                    st.dataframe(
-                        t5.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                with c2:
-                    st.markdown("**Vendors**")
-                    v1 = _top_list(dy, "Vendor", 1)
-                    v3 = _top_list(dy, "Vendor", 3)
-                    v5 = _top_list(dy, "Vendor", 5)
-
-                    st.markdown("Top 1 Vendor")
-                    st.dataframe(
-                        v1.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 3 Vendors")
-                    st.dataframe(
-                        v3.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                    st.markdown("Top 5 Vendors")
-                    st.dataframe(
-                        v5.style.format({value_col: (fmt_currency if value_col=="Sales" else fmt_int),
-                                         "Share": (lambda v: f"{v*100:.1f}%")}),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-with st.expander("Show Top Retailers/Vendors for every year (compact list)", expanded=False):
-            for y in years:
-                dy = d[d["Year"] == int(y)].copy()
-                r3 = _top_list(dy, "Retailer", 3)
-                v3 = _top_list(dy, "Vendor", 3)
-                # compact strings
-                r_str = ", ".join([f"{row['Retailer']} ({row['Share']*100:.1f}%)" for _, row in r3.iterrows()]) if not r3.empty else "—"
-                v_str = ", ".join([f"{row['Vendor']} ({row['Share']*100:.1f}%)" for _, row in v3.iterrows()]) if not v3.empty else "—"
-                st.markdown(f"**{int(y)}** — Top 3 Retailers: {r_str}  
-Top 3 Vendors: {v_str}")
-)
+        conc_disp = conc.copy()
+        st.dataframe(conc_disp.style.format({c: (lambda v: f"{v*100:.1f}%") for c in conc_disp.columns if c != "Year"}),
+                     use_container_width=True, hide_index=True)
 
         # -------------------------
-        # Retailer summary (year pick ONLY here)
+        # Retailer summary
         # -------------------------
-        st.markdown("### Retailer summary (pick years here)")
-        r1, r2 = st.columns(2)
-        with r1:
-            r_base = st.selectbox("Retailer Base Year", options=years, index=max(0, len(years)-2), key="ys_r_base_v3")
-        with r2:
-            r_comp = st.selectbox("Retailer Comparison Year", options=years, index=len(years)-1, key="ys_r_comp_v3")
-
-        ra = d[d["Year"] == int(r_base)].groupby("Retailer", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
-        rb = d[d["Year"] == int(r_comp)].groupby("Retailer", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
+        st.markdown("### Retailer summary")
+        ra = a.groupby("Retailer", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
+        rb = b.groupby("Retailer", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
         r = ra.merge(rb, on="Retailer", how="outer").fillna(0.0)
         r["Units_Diff"] = r["Units_B"] - r["Units_A"]
         r["Sales_Diff"] = r["Sales_B"] - r["Sales_A"]
         r["Units_%"] = r["Units_Diff"] / r["Units_A"].replace(0, np.nan)
         r["Sales_%"] = r["Sales_Diff"] / r["Sales_A"].replace(0, np.nan)
 
-        rsort = st.selectbox("Sort retailer table by", ["Sales_Diff","Units_Diff","Sales_B","Sales_A"], key="ys_r_sort_v3")
+        rsort = st.selectbox("Sort retailer table by", ["Sales_Diff","Units_Diff","Sales_B","Sales_A"], key="ys_r_sort")
         r = r.sort_values(rsort, ascending=False, kind="mergesort")
         r_disp = r[["Retailer","Units_A","Units_B","Units_Diff","Units_%","Sales_A","Sales_B","Sales_Diff","Sales_%"]]
         r_sty = r_disp.style.format({
@@ -3948,24 +3705,18 @@ Top 3 Vendors: {v_str}")
         st.dataframe(r_sty, use_container_width=True, height=_table_height(r_disp, max_px=1100), hide_index=True)
 
         # -------------------------
-        # Vendor summary (year pick ONLY here)
+        # Vendor summary
         # -------------------------
-        st.markdown("### Vendor summary (pick years here)")
-        v1, v2 = st.columns(2)
-        with v1:
-            v_base = st.selectbox("Vendor Base Year", options=years, index=max(0, len(years)-2), key="ys_v_base_v3")
-        with v2:
-            v_comp = st.selectbox("Vendor Comparison Year", options=years, index=len(years)-1, key="ys_v_comp_v3")
-
-        va = d[d["Year"] == int(v_base)].groupby("Vendor", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
-        vb = d[d["Year"] == int(v_comp)].groupby("Vendor", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
+        st.markdown("### Vendor summary")
+        va = a.groupby("Vendor", as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
+        vb = b.groupby("Vendor", as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
         v = va.merge(vb, on="Vendor", how="outer").fillna(0.0)
         v["Units_Diff"] = v["Units_B"] - v["Units_A"]
         v["Sales_Diff"] = v["Sales_B"] - v["Sales_A"]
         v["Units_%"] = v["Units_Diff"] / v["Units_A"].replace(0, np.nan)
         v["Sales_%"] = v["Sales_Diff"] / v["Sales_A"].replace(0, np.nan)
 
-        vsort = st.selectbox("Sort vendor table by", ["Sales_Diff","Units_Diff","Sales_B","Sales_A"], key="ys_v_sort_v3")
+        vsort = st.selectbox("Sort vendor table by", ["Sales_Diff","Units_Diff","Sales_B","Sales_A"], key="ys_v_sort")
         v = v.sort_values(vsort, ascending=False, kind="mergesort")
         v_disp = v[["Vendor","Units_A","Units_B","Units_Diff","Units_%","Sales_A","Sales_B","Sales_Diff","Sales_%"]]
         v_sty = v_disp.style.format({
@@ -3989,29 +3740,29 @@ with tab_exec:
 
     # Filter scope
     if scope == "Retailer":
-        opts = sorted([x for x in df_all["Retailer"].dropna().unique().tolist() if str(x).strip()])
+        opts = sorted([x for x in df["Retailer"].dropna().unique().tolist() if str(x).strip()])
         pick = st.selectbox("Retailer", options=opts, index=0 if opts else 0, key="ex_pick_r")
-        d_base = df_all[df_all["Retailer"] == pick].copy()
+        d = df[df["Retailer"] == pick].copy()
         title = f"Executive Summary - {pick}"
     elif scope == "Vendor":
-        opts = sorted([x for x in df_all["Vendor"].dropna().unique().tolist() if str(x).strip()])
+        opts = sorted([x for x in df["Vendor"].dropna().unique().tolist() if str(x).strip()])
         pick = st.selectbox("Vendor", options=opts, index=0 if opts else 0, key="ex_pick_v")
-        d_base = df_all[df_all["Vendor"] == pick].copy()
+        d = df[df["Vendor"] == pick].copy()
         title = f"Executive Summary - {pick}"
     else:
-        d_base = df_all.copy()
+        d = df.copy()
         title = "Executive Summary - All Retailers"
 
-    d_base["StartDate"] = pd.to_datetime(d_base["StartDate"], errors="coerce")
-    d_base = d_base[d_base["StartDate"].notna()].copy()
-    if d_base.empty:
+    d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+    d = d[d["StartDate"].notna()].copy()
+    if d.empty:
         st.info("No rows in the selected scope/year.")
         st.stop()
 
-    d_base["Year"] = d_base["StartDate"].dt.year.astype(int)
-    years = sorted(d_base["Year"].unique().tolist())
+    d["Year"] = d["StartDate"].dt.year.astype(int)
+    years = sorted(d["Year"].unique().tolist())
     pick_year = st.selectbox("Year", options=years, index=(len(years)-1 if years else 0), key="ex_year_pick")
-    d = d_base[d_base["Year"] == int(pick_year)].copy()
+    d = d[d["Year"] == int(pick_year)].copy()
 
     st.caption(title)
 
@@ -4104,14 +3855,4 @@ with tab_exec:
             st.markdown("### Bottom 10 SKUs (by Sales)")
             bot10 = sold.sort_values("Sales", ascending=True, kind="mergesort").head(10)[["SKU","Vendor","Units","Sales"]]
             st.dataframe(bot10.style.format({"Units": fmt_int, "Sales": fmt_currency}), use_container_width=True, hide_index=True, height=_table_height(bot10, max_px=520))
-
-    st.divider()
-    st.subheader("Yearly totals (all years)")
-
-    yt = d_base.groupby("Year", as_index=False).agg(Units=("Units","sum"), Sales=("Sales","sum")).sort_values("Year")
-    st.dataframe(
-        yt.style.format({"Units": fmt_int, "Sales": fmt_currency}),
-        use_container_width=True,
-        hide_index=True
-    )
 
