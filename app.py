@@ -45,6 +45,19 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+
+# -------------------------
+# App Constants / Default Paths
+# -------------------------
+APP_TITLE = "Sales Report App"
+
+DEFAULT_VENDOR_MAP = Path("vendor_map.xlsx")
+DEFAULT_SALES_STORE = Path("data/sales_store.csv")
+DEFAULT_PRICE_HISTORY = Path("data/price_history.csv")
+DEFAULT_YEAR_LOCKS = Path("data/year_locks.json")
+
+# Bundled vendor map (repo copy); used to seed DEFAULT_VENDOR_MAP if missing
+BUNDLED_VENDOR_MAP = Path("vendor_map.xlsx")
 MONTH_NAME_TO_NUM = {
     "January": 1, "February": 2, "March": 3, "April": 4,
     "May": 5, "June": 6, "July": 7, "August": 8,
@@ -1072,7 +1085,7 @@ def wow_mom_metrics(df: pd.DataFrame) -> dict:
 def month_label(p: pd.Period) -> str:
     return p.to_timestamp().strftime("%B %Y")
 
-APP_TITLE = "Sales Report App"
+ "Sales Report App"
 
 # -------------------------
 # App UI
