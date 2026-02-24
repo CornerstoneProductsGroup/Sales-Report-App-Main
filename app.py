@@ -64,11 +64,13 @@ def resolve_avg_use(avg_window, use_cols, current_year):
     """
     if not use_cols:
         return []
+
     # Month+Year like 'January 2026'
     if isinstance(avg_window, str):
-        m = re.match(r"^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$", avg_window.strip())
-        if m:
-            mon, yy = m.group(1), int(m.group(2))
+        mm = re.match(r"^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})$",
+                      avg_window.strip())
+        if mm:
+            mon, yy = mm.group(1), int(mm.group(2))
             mnum = MONTH_NAME_TO_NUM.get(mon)
             dates = pd.to_datetime(pd.Series(list(use_cols)), errors="coerce")
             mask = (dates.dt.year == int(yy)) & (dates.dt.month == int(mnum))
@@ -81,7 +83,7 @@ def resolve_avg_use(avg_window, use_cols, current_year):
         mask = (dates.dt.year == int(current_year)) & (dates.dt.month == int(mnum))
         return [c for c, ok in zip(use_cols, mask.fillna(False).tolist()) if ok]
 
-    # rolling weeks like '8 weeks'
+    # Rolling weeks like '8 weeks'
     if isinstance(avg_window, str) and "week" in avg_window:
         try:
             n = int(avg_window.split()[0])
@@ -90,21 +92,7 @@ def resolve_avg_use(avg_window, use_cols, current_year):
         return use_cols[-n:] if len(use_cols) >= n else use_cols
 
     return use_cols
-[-n:] if len(use_cols) >= n else use_cols
-    return use_cols
 
-
-APP_TITLE = "Sales Dashboard (Vendor Map + Weekly Sheets)"
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
-
-DEFAULT_VENDOR_MAP = DATA_DIR / "vendor_map.xlsx"
-DEFAULT_SALES_STORE = DATA_DIR / "sales_store.csv"
-DEFAULT_PRICE_HISTORY = DATA_DIR / "price_history.csv"
-
-
-# Year locks (prevent accidental edits to closed years)
-DEFAULT_YEAR_LOCKS = DATA_DIR / "year_locks.json"
 
 def load_year_locks() -> set[int]:
     try:
