@@ -1611,7 +1611,9 @@ def render_comparison_retailer_vendor():
                     styles[j] = "background-color: rgba(0, 200, 0, 0.18); font-weight: 600;"
                 elif np.isclose(v, vmin):
                     styles[j] = "background-color: rgba(220, 0, 0, 0.14);"
-            return styles        fmt = {}
+            return styles
+
+        fmt = {}
         for c in disp.columns:
             if c.startswith("Units_"):
                 fmt[c] = fmt_int
