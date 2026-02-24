@@ -1283,23 +1283,46 @@ def to_pdf_bytes(title: str, sections: list[tuple[str, list[str]]]) -> bytes:
 
 
 def render_comparison_retailer_vendor():
-        st.subheader("Comparison (Month vs Month / Multi-month)")
+        st.subheader("Comparison")
 
         if df.empty:
             st.info("No sales data yet.")
+            return
+
+        d = df_all.copy()
+        d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
+        d = d[d["StartDate"].notna()].copy()
+
+        # Build month + year options across ALL years in the store
+        d["MonthP"] = d["StartDate"].dt.to_period("M")
+        months = sorted(d["MonthP"].unique().tolist())
+        month_labels = [m.to_timestamp().strftime("%B %Y") for m in months]
+        label_to_period = dict(zip(month_labels, months))
+
+        d["Year"] = d["StartDate"].dt.year.astype(int)
+        years = sorted(d["Year"].dropna().unique().tolist())
+
+        mode = st.radio(
+            "Compare mode",
+            options=["Months", "Years"],
+            index=0,
+            horizontal=True,
+            key="cmp_mode_months_years"
+        )
+
+        c1, c2, c3 = st.columns([2, 2, 1])
+        with c3:
+            by = st.selectbox("Compare by", ["Retailer", "Vendor"], key="cmp_by")
+
+        # Optional limiter list
+        if by == "Retailer":
+            options = sorted(d["Retailer"].dropna().unique().tolist())
         else:
-            d = df_all.copy()
-            d["StartDate"] = pd.to_datetime(d["StartDate"], errors="coerce")
-            d = d[d["StartDate"].notna()].copy()
+            options = sorted([v for v in d["Vendor"].dropna().unique().tolist() if str(v).strip()])
 
-            # Month options across ALL years (so you can compare Jan 2025 vs Jan 2026)
-            d["MonthP"] = d["StartDate"].dt.to_period("M")
+        sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, key="cmp_limit")
 
-            months = sorted(d["MonthP"].unique().tolist())
-            month_labels = [m.to_timestamp().strftime("%B %Y") for m in months]
-            label_to_period = dict(zip(month_labels, months))
-
-            c1, c2, c3 = st.columns([2, 2, 1])
+        if mode == "Months":
             with c1:
                 a_pick = st.multiselect(
                     "Selection A (one or more months)",
@@ -1314,72 +1337,146 @@ def render_comparison_retailer_vendor():
                     default=month_labels[-2:-1] if len(month_labels) >= 2 else [],
                     key="cmp_b_months"
                 )
-            with c3:
-                by = st.selectbox("Compare by", ["Retailer", "Vendor"], key="cmp_by")
-
-            if by == "Retailer":
-                options = sorted(d["Retailer"].dropna().unique().tolist())
-            else:
-                options = sorted([v for v in d["Vendor"].dropna().unique().tolist() if str(v).strip()])
-
-            sel = st.multiselect(f"Limit to {by}(s) (optional)", options=options, key="cmp_limit")
 
             a_periods = [label_to_period[x] for x in a_pick if x in label_to_period]
             b_periods = [label_to_period[x] for x in b_pick if x in label_to_period]
 
             if not a_periods or not b_periods:
                 st.info("Pick at least one month in Selection A and Selection B.")
-            else:
-                da = d[d["MonthP"].isin(a_periods)]
-                db = d[d["MonthP"].isin(b_periods)]
+                return
 
-                if sel:
-                    da = da[da[by].isin(sel)]
-                    db = db[db[by].isin(sel)]
+            da = d[d["MonthP"].isin(a_periods)]
+            db = d[d["MonthP"].isin(b_periods)]
 
-                ga = da.groupby(by, as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
-                gb = db.groupby(by, as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
+            if sel:
+                da = da[da[by].isin(sel)]
+                db = db[db[by].isin(sel)]
 
-                out = ga.merge(gb, on=by, how="outer").fillna(0.0)
-                out["Units_Diff"] = out["Units_A"] - out["Units_B"]
-                out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
-                out["Units_%"] = out["Units_Diff"] / out["Units_B"].replace(0, np.nan)
-                out["Sales_%"] = out["Sales_Diff"] / out["Sales_B"].replace(0, np.nan)
+            ga = da.groupby(by, as_index=False).agg(Units_A=("Units","sum"), Sales_A=("Sales","sum"))
+            gb = db.groupby(by, as_index=False).agg(Units_B=("Units","sum"), Sales_B=("Sales","sum"))
 
-                total = {
-                    by: "TOTAL",
-                    "Units_A": out["Units_A"].sum(),
-                    "Sales_A": out["Sales_A"].sum(),
-                    "Units_B": out["Units_B"].sum(),
-                    "Sales_B": out["Sales_B"].sum(),
-                }
-                total["Units_Diff"] = total["Units_A"] - total["Units_B"]
-                total["Sales_Diff"] = total["Sales_A"] - total["Sales_B"]
-                total["Units_%"] = total["Units_Diff"] / total["Units_B"] if total["Units_B"] else np.nan
-                total["Sales_%"] = total["Sales_Diff"] / total["Sales_B"] if total["Sales_B"] else np.nan
+            out = ga.merge(gb, on=by, how="outer").fillna(0.0)
+            out["Units_Diff"] = out["Units_A"] - out["Units_B"]
+            out["Sales_Diff"] = out["Sales_A"] - out["Sales_B"]
+            out["Units_%"] = out["Units_Diff"] / out["Units_B"].replace(0, np.nan)
+            out["Sales_%"] = out["Sales_Diff"] / out["Sales_B"].replace(0, np.nan)
 
-                out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
+            total = {
+                by: "TOTAL",
+                "Units_A": out["Units_A"].sum(),
+                "Sales_A": out["Sales_A"].sum(),
+                "Units_B": out["Units_B"].sum(),
+                "Sales_B": out["Sales_B"].sum(),
+            }
+            total["Units_Diff"] = total["Units_A"] - total["Units_B"]
+            total["Sales_Diff"] = total["Sales_A"] - total["Sales_B"]
+            total["Units_%"] = total["Units_Diff"] / total["Units_B"] if total["Units_B"] else np.nan
+            total["Sales_%"] = total["Sales_Diff"] / total["Sales_B"] if total["Sales_B"] else np.nan
 
-                disp = out[[by,"Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]]
-                sty = disp.style.format({
-                    "Units_A": fmt_int,
-                    "Units_B": fmt_int,
-                    "Units_Diff": fmt_int,
-                    "Units_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-                    "Sales_A": fmt_currency,
-                    "Sales_B": fmt_currency,
-                    "Sales_Diff": fmt_currency,
-                    "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
-                }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
+            out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
 
-                st.dataframe(sty, use_container_width=True, hide_index=True)
-    # -------------------------
+            disp = out[[by,"Units_A","Sales_A","Units_B","Sales_B","Units_Diff","Units_%","Sales_Diff","Sales_%"]]
+            sty = disp.style.format({
+                "Units_A": fmt_int,
+                "Units_B": fmt_int,
+                "Units_Diff": fmt_int,
+                "Units_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+                "Sales_A": fmt_currency,
+                "Sales_B": fmt_currency,
+                "Sales_Diff": fmt_currency,
+                "Sales_%": lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—",
+            }).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Diff","Sales_Diff"])
 
+            st.dataframe(sty, use_container_width=True, hide_index=True)
+            return
 
+        # Years mode (multi-year, up to ~5 years as requested)
+        with c1:
+            years_pick = st.multiselect(
+                "Years to compare (pick up to 5)",
+                options=years,
+                default=years[-3:] if len(years) >= 3 else years,
+                key="cmp_years_pick"
+            )
+        with c2:
+            base_year = st.selectbox(
+                "Baseline year (for Δ columns)",
+                options=years_pick if years_pick else years,
+                index=0 if years_pick else 0,
+                key="cmp_years_baseline"
+            )
 
-    # -------------------------
-    # SKU Comparison
-    # -------------------------
+        years_pick = [int(y) for y in years_pick][:5]  # enforce max 5
+        if not years_pick:
+            st.info("Pick one or more years.")
+            return
+
+        dd = d[d["Year"].isin(years_pick)].copy()
+        if sel:
+            dd = dd[dd[by].isin(sel)]
+
+        # Pivot-like wide table with one column per year (Units/Sales)
+        pieces = []
+        for y in years_pick:
+            gy = dd[dd["Year"] == int(y)].groupby(by, as_index=False).agg(**{
+                f"Units_{y}": ("Units", "sum"),
+                f"Sales_{y}": ("Sales", "sum"),
+            })
+            pieces.append(gy)
+
+        out = pieces[0]
+        for p in pieces[1:]:
+            out = out.merge(p, on=by, how="outer")
+
+        out = out.fillna(0.0)
+
+        # Δ vs baseline (first year by default)
+        by_base = int(base_year) if base_year is not None else int(years_pick[0])
+        last_year = int(years_pick[-1])
+
+        if f"Units_{by_base}" in out.columns and f"Units_{last_year}" in out.columns:
+            out["Units_Δ"] = out[f"Units_{last_year}"] - out[f"Units_{by_base}"]
+            out["Units_%"] = out["Units_Δ"] / out[f"Units_{by_base}"].replace(0, np.nan)
+        else:
+            out["Units_Δ"] = 0.0
+            out["Units_%"] = np.nan
+
+        if f"Sales_{by_base}" in out.columns and f"Sales_{last_year}" in out.columns:
+            out["Sales_Δ"] = out[f"Sales_{last_year}"] - out[f"Sales_{by_base}"]
+            out["Sales_%"] = out["Sales_Δ"] / out[f"Sales_{by_base}"].replace(0, np.nan)
+        else:
+            out["Sales_Δ"] = 0.0
+            out["Sales_%"] = np.nan
+
+        # Totals row at bottom
+        total = {by: "TOTAL"}
+        for c in out.columns:
+            if c == by:
+                continue
+            total[c] = float(out[c].sum()) if pd.api.types.is_numeric_dtype(out[c]) else ""
+
+        out = pd.concat([out, pd.DataFrame([total])], ignore_index=True)
+
+        # Order columns: by, year columns, deltas
+        year_cols = []
+        for y in years_pick:
+            year_cols += [f"Units_{y}", f"Sales_{y}"]
+        cols = [by] + [c for c in year_cols if c in out.columns] + ["Units_Δ","Units_%","Sales_Δ","Sales_%"]
+        disp = out[cols].copy()
+
+        fmt = {}
+        for c in disp.columns:
+            if c.startswith("Units_") or c == "Units_Δ":
+                fmt[c] = fmt_int
+            if c.startswith("Sales_") or c == "Sales_Δ":
+                fmt[c] = fmt_currency
+        fmt["Units_%"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+        fmt["Sales_%"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+
+        sty = disp.style.format(fmt).applymap(lambda v: f"color: {_color(v)};", subset=["Units_Δ","Sales_Δ"])
+
+        st.dataframe(sty, use_container_width=True, hide_index=True)
+
 
 
 def render_comparison_sku():
