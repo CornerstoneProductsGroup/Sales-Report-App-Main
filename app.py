@@ -1620,9 +1620,9 @@ def render_comparison_retailer_vendor():
             elif c.startswith("Sales_"):
                 fmt[c] = fmt_currency
         if "Trend %" in disp.columns:
-            fmt["Trend %"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+            fmt["Trend %"] = lambda v: (f"{float(v)*100:.1f}%" if (v is not None and pd.notna(v) and str(v).strip() not in {"", "—"}) else "—")
         if "CAGR %" in disp.columns:
-            fmt["CAGR %"] = lambda v: f"{v*100:.1f}%" if pd.notna(v) else "—"
+            fmt["CAGR %"] = lambda v: (f"{float(v)*100:.1f}%" if (v is not None and pd.notna(v) and str(v).strip() not in {"", "—"}) else "—")
 
         sty = disp.style.format(fmt).apply(_hl_minmax, axis=1)
 
